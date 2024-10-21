@@ -1,0 +1,22 @@
+[build-system]
+requires = ["setuptools", "setuptools-scm"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "SEFT"
+version = "0.0.1-alpha"
+description = "Sparse Early Fusion Transformer (SEFT) for spatio-temporal modalities."
+readme = "README.md"
+requires-python = ">=3.11"
+authors = [
+    {name = "Uros Zivanovic", email = "uki@cro.moe"}
+]
+dependencies = [
+    "torch"
+]
+
+[project.urls]
+Repository = "https://github.com/Chromeilion/SEFT"
+
+[tool.setuptools.packages.find]
+include = ["seft"]
