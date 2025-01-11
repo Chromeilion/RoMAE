@@ -1,13 +1,14 @@
 import torch
 import torch.nn as nn
-import math
+import torch.nn.functional as F
+from timm.layers import drop_path, trunc_normal_, use_fused_attn
 
 
 class SEFTConfig:
     def __init__(self,
                  tubelet_size: tuple[int, int, int] = (1, 1, 16),
-                 d_model: int = 512,
-                 num_layers: int = 12,
+                 d_model: int = 768,
+                 depth: int = 12,
                  nhead: int = 12,
                  dim_feedforward: int = 3072,
                  activation: str = "gelu",
@@ -15,10 +16,19 @@ class SEFTConfig:
                  attention_probs_dropout_prob: float = 0.1,
                  initializer_range: float = 0.02,
                  layer_norm_eps: float = 1e-12,
+                 max_len: int = 1500,
+                 drop_rate: float = 0.0,
+                 drop_path_rate: float = 0.,
+                 mlp_ratio: float = 4.,
+                 attn_drop_rate: float = 0.,
+                 norm_layer = nn.LayerNorm,
+                 init_values: float = 0.,
+                 head_drop_rate: float = 0.,
+                 num_classes: int = 0,
+                 init_scale: float = 0.0,
                  *args, **kwargs):
         self.tubelet_size = tubelet_size
         self.d_model = d_model
-        self.num_layers = num_layers
         self.nhead = nhead
         self.dim_feedforward = dim_feedforward
         self.activation = activation
@@ -26,6 +36,17 @@ class SEFTConfig:
         self.attention_probs_dropout_prob = attention_probs_dropout_prob
         self.initializer_range = initializer_range
         self.layer_norm_eps = layer_norm_eps
+        self.max_len = max_len
+        self.drop_rate = drop_rate
+        self.drop_path_rate = drop_path_rate
+        self.depth = depth
+        self.mlp_ratio = mlp_ratio
+        self.attn_drop_rate = attn_drop_rate
+        self.norm_layer = norm_layer
+        self.init_values = init_values
+        self.init_scale = init_scale
+        self.head_drop_rate = head_drop_rate
+        self.num_classes = num_classes
 
 
 class SEFT(nn.Module):
@@ -34,61 +55,55 @@ class SEFT(nn.Module):
         if config.d_model % 2 != 0:
             raise ValueError(f"Cannot use sin/cos positional encoding with "
                              f"an odd dim ({config.d_model})")
-
-        encoder_layer = nn.TransformerEncoderLayer(
-            d_model=config.d_model,
+        self.config: SEFTConfig = config
+        self.num_classes = config.num_classes
+        self.pos_drop = nn.Dropout(p=config.drop_rate)
+        dpr = [x.item() for x in torch.linspace(0, config.drop_path_rate,
+                                                config.depth)
+               ]  # stochastic depth decay rule
+        transfrmer_layer = nn.TransformerEncoderLayer(
+            config.d_model,
             nhead=config.nhead,
             dim_feedforward=config.dim_feedforward,
-            dropout=config.hidden_dropout_prob,
-            activation=config.activation,
-            layer_norm_eps=config.layer_norm_eps,
-            batch_first=True
+            activation=F.gelu,
+            batch_first=True,
+            dropout=config.attn_drop_rate
         )
         self.encoder = nn.TransformerEncoder(
-            encoder_layer,
-            num_layers=config.num_layers,
+            transfrmer_layer,
+            num_layers=config.depth
         )
+        self.fc_norm = config.norm_layer(config.d_model)
+        self.head_dropout = nn.Dropout(config.head_drop_rate)
+        self.head = nn.Linear(config.d_model, config.num_classes)
+        self.projection = nn.Linear(config.tubelet_size[0] * config.tubelet_size[1], config.d_model)
+        self.pos_embedding = nn.Parameter(torch.zeros(config.max_len, config.d_model))
+        self.cls = nn.Parameter(torch.zeros(config.d_model))
 
-    def forward(self, x, mask):
-        x = self.patchify(x)
-        x = x[:, mask]
+    def forward(self, values, positions, pad_mask, label=None):
+        positions += 1
+        zeros = torch.zeros((positions.shape[0], 1), device=positions.device, dtype=torch.long)
+        positions = torch.cat([zeros, positions], dim=1)
+        pad_mask = torch.cat([zeros.bool(), pad_mask], dim=1)
+        B = values.shape[0]
+        patch_size = self.config.tubelet_size[0] * self.config.tubelet_size[1]
+        n_patches = values.shape[1] // self.config.tubelet_size[0] * values.shape[2] // self.config.tubelet_size[1]
+        values = values.reshape(B, n_patches, patch_size)
+        x = self.projection(values)
+        x = torch.cat([self.cls.expand(B, 1, -1), x], dim=1)
+        x += self.pos_embedding[positions]
+        x = self.pos_drop(x)
+        x = self.encoder(x, src_key_padding_mask=pad_mask)
+        x = self.fc_norm(x[:, 0, :])
+        x = self.head_dropout(x)
+        logits = self.head(x)
 
-        x = torch.nested.nested_tensor(x[:, mask], layout=torch.jagged)
+        loss = None
+        if label is not None:
+            loss = F.cross_entropy(F.softmax(logits, dim=1), label)
 
-        return x
+        return logits, loss
 
-    def patchify(self, x):
-        """
-        Expected input format: BTHW
-        Converts the input video-like format to patches
-        """
-        B, T, H, W = x.shape[0], x.shape[1], x.shape[2], x.shape[3]
 
-        T_p = T//self.tubelet_size[0]
-        H_p = H//self.tubelet_size[1]
-        W_p = W//self.tubelet_size[2]
-        N = T_p * H_p * W_p
 
-        return x.reshape(-1, N, T_p, H_p, W_p)
 
-# Based on the following implementation:
-# https://github.com/huggingface/pytorch-image-models/blob/main/timm/models/vision_transformer.py
-def partial_positional_encoding(d_model, positions):
-    """
-    Generate a position embedding for a set of positions. Function avoids
-    generating the whole positional encoding array and instead only generates
-    what is needed.
-
-    d_model : int
-        Embedding dimension of the model
-    positions : torch.Tensor
-        Positions for which to generate the embeddings
-    """
-    length = positions.shape[1]
-    pe = torch.zeros(length, d_model)
-    div_term = torch.exp((torch.arange(0, d_model, 2, dtype=torch.float) *
-                          -(math.log(10000.0) / d_model)))
-    pe[:, 0::2] = torch.sin(positions.float() * div_term)
-    pe[:, 1::2] = torch.cos(positions.float() * div_term)
-
-    return pe

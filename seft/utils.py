@@ -23,3 +23,18 @@ class TestModel(nn.Module):
         if label is not None:
             loss = self.config.criterion(pred, label)
         return pred, loss
+
+
+def patchify(self, x):
+    """
+    Expected input format: BTHW
+    Converts the input video-like format to patches
+    """
+    B, T, H, W = x.shape[0], x.shape[1], x.shape[2], x.shape[3]
+
+    T_p = T//self.tubelet_size[0]
+    H_p = H//self.tubelet_size[1]
+    W_p = W//self.tubelet_size[2]
+    N = T_p * H_p * W_p
+
+    return x.reshape(-1, N, T_p, H_p, W_p)
