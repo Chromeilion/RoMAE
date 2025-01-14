@@ -21,7 +21,7 @@ class TrainerConfig:
     save_every: int
     batch_size: int
     checkpoint_dir: PathLike = "./checkpoints"
-    num_dataset_workers: int = 4
+    num_dataset_workers: int = 0
     run_name: str = datetime.today().strftime('%Y-%m-%d-%H-%M-%S')
     project_name: str = "SEFT"
     collate_fn: Callable[[Any], Any] = torch.utils.data.dataloader.default_collate

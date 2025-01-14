@@ -81,11 +81,11 @@ class SEFT(nn.Module):
         self.cls = nn.Parameter(torch.zeros(config.d_model))
 
     def forward(self, values, positions, pad_mask, label=None):
+        B = values.shape[0]
         positions += 1
-        zeros = torch.zeros((positions.shape[0], 1), device=positions.device, dtype=torch.long)
+        zeros = torch.zeros((B, 1), device=positions.device, dtype=torch.long)
         positions = torch.cat([zeros, positions], dim=1)
         pad_mask = torch.cat([zeros.bool(), pad_mask], dim=1)
-        B = values.shape[0]
         patch_size = self.config.tubelet_size[0] * self.config.tubelet_size[1]
         n_patches = values.shape[1] // self.config.tubelet_size[0] * values.shape[2] // self.config.tubelet_size[1]
         values = values.reshape(B, n_patches, patch_size)
@@ -100,10 +100,6 @@ class SEFT(nn.Module):
 
         loss = None
         if label is not None:
-            loss = F.cross_entropy(F.softmax(logits, dim=1), label)
+            loss = F.cross_entropy(logits, label)
 
         return logits, loss
-
-
-
-
