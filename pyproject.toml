@@ -13,7 +13,8 @@ authors = [
 ]
 dependencies = [
     "torch",
-    "numpy"
+    "numpy",
+    "wandb"
 ]
 
 [project.urls]

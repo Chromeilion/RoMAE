@@ -49,7 +49,6 @@ class Trainer:
         train_dataloader = torch.utils.data.DataLoader(
             train_dataset,
             batch_size=self.config.batch_size,
-            shuffle=True,
             num_workers=self.config.num_dataset_workers,
             pin_memory=True,
             collate_fn=self.config.collate_fn
@@ -57,7 +56,6 @@ class Trainer:
         test_dataloader = torch.utils.data.DataLoader(
             test_dataset,
             batch_size=self.config.batch_size,
-            shuffle=True,
             num_workers=self.config.num_dataset_workers,
             pin_memory=True,
             collate_fn=self.config.collate_fn
@@ -69,7 +67,7 @@ class Trainer:
         model.train()
         model.to(self.config.device)
         step_counter = 0
-        with tqdm.tqdm(total=len(train_dataloader)*self.config.epochs,
+        with tqdm.tqdm(total=train_dataset.dataset_size*self.config.epochs,
                        desc="Training") as pbar:
             for epoch in range(self.config.epochs):
                 for modelargs in train_dataloader:
@@ -100,7 +98,7 @@ class Trainer:
             modelargs = {key: val.to(self.config.device) for key, val in
                          modelargs.items()}
             _, loss_ = model(**modelargs)
-            loss += loss_ / len(test_dataloader)
+            loss += loss_ / test_dataloader.dataset.dataset_size
         wandb.log({"loss/validation": loss.item()})
         print(f"Test loss: {loss.item()}\n")
 
