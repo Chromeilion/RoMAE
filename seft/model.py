@@ -1,51 +1,38 @@
+from typing import Callable, Any
+
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from pydantic import Field
+from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
-class SEFTConfig:
-    def __init__(self,
-                 tubelet_size: tuple[int, int, int] = (1, 1, 16),
-                 d_model: int = 768,
-                 depth: int = 12,
-                 nhead: int = 12,
-                 dim_feedforward: int = 3072,
-                 activation: str = "gelu",
-                 hidden_dropout_prob: float = 0.1,
-                 attention_probs_dropout_prob: float = 0.1,
-                 initializer_range: float = 0.02,
-                 layer_norm_eps: float = 1e-12,
-                 max_len: int = 1500,
-                 drop_rate: float = 0.0,
-                 drop_path_rate: float = 0.,
-                 mlp_ratio: float = 4.,
-                 attn_drop_rate: float = 0.,
-                 norm_layer = nn.LayerNorm,
-                 init_values: float = 0.,
-                 head_drop_rate: float = 0.,
-                 num_classes: int = 0,
-                 init_scale: float = 0.0,
-                 *args, **kwargs):
-        self.tubelet_size = tubelet_size
-        self.d_model = d_model
-        self.nhead = nhead
-        self.dim_feedforward = dim_feedforward
-        self.activation = activation
-        self.hidden_dropout_prob = hidden_dropout_prob
-        self.attention_probs_dropout_prob = attention_probs_dropout_prob
-        self.initializer_range = initializer_range
-        self.layer_norm_eps = layer_norm_eps
-        self.max_len = max_len
-        self.drop_rate = drop_rate
-        self.drop_path_rate = drop_path_rate
-        self.depth = depth
-        self.mlp_ratio = mlp_ratio
-        self.attn_drop_rate = attn_drop_rate
-        self.norm_layer = norm_layer
-        self.init_values = init_values
-        self.init_scale = init_scale
-        self.head_drop_rate = head_drop_rate
-        self.num_classes = num_classes
+class SEFTConfig(BaseSettings):
+    model_config = SettingsConfigDict(
+        env_prefix='SEFT_MODEL_',
+        env_file='.env',
+        extra="ignore"
+    )
+    d_model: int = Field(768)
+    nhead: int = Field(12)
+    dim_feedforward: int = Field(3072)
+    activation: str = Field("gelu")
+    hidden_dropout_prob: float = Field(0.1)
+    attention_probs_dropout_prob: float = Field(0.1)
+    initializer_range: float = Field(0.02)
+    layer_norm_eps: float = Field(1e-12)
+    max_len: int = Field(1500)
+    drop_rate: float = Field(0.)
+    drop_path_rate: float = Field(0.)
+    depth: int = Field(12)
+    mlp_ratio: float = Field(4.)
+    attn_drop_rate: float = Field(0.)
+    norm_layer: Callable[[Any], Any] = Field(nn.LayerNorm)
+    init_values: float = Field(0.)
+    init_scale: float = Field(0.)
+    head_drop_rate: float = Field(0.)
+    num_classes: int = Field(0)
+    tubelet_size: tuple[int, int, int] = Field((1, 1, 16))
 
 
 class SEFT(nn.Module):
@@ -94,7 +81,7 @@ class SEFT(nn.Module):
         B = values.shape[0]
         # Here we add one to all the positions and masks because we're
         # inserting the cls token at the start.
-        positions += 1
+        positions = positions + 1
         zeros = torch.zeros((B, 1), device=positions.device, dtype=torch.long)
         positions = torch.cat([zeros, positions], dim=1)
         pad_mask = torch.cat([zeros.bool(), pad_mask], dim=1)

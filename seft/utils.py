@@ -1,5 +1,7 @@
 from dataclasses import dataclass
 
+from pydantic_settings import BaseSettings
+from pydantic_core import PydanticUndefined
 import torch
 import torch.nn as nn
 
@@ -38,3 +40,19 @@ def patchify(self, x):
     N = T_p * H_p * W_p
 
     return x.reshape(-1, N, T_p, H_p, W_p)
+
+
+def add_model(parser, model):
+    """Add Pydantic model to an ArgumentParser
+    Thanks miksus:
+    https://stackoverflow.com/questions/72741663/argument-parser-from-a-pydantic-model
+    """
+    fields = model.__fields__
+    for name, field in fields.items():
+        parser.add_argument(
+            f"--{name}",
+            dest=name,
+            type=field.annotation,
+            default=PydanticUndefined,
+            help=field.description,
+        )
