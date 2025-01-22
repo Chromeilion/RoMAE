@@ -14,7 +14,7 @@ from accelerate.data_loader import skip_first_batches
 torch._dynamo.config.suppress_errors = True
 PathLike = str | os.PathLike
 
-
+noop = lambda *_, **__: None
 
 class TrainerConfig(BaseSettings):
     model_config = SettingsConfigDict(
@@ -33,7 +33,7 @@ class TrainerConfig(BaseSettings):
         description="Where to save the model throughout training"
     )
     num_dataset_workers: int = Field(
-        os.cpu_count()//2,
+        os.cpu_count()//2 - 1,
         description="Number of dataloader workers"
     )
     run_name: str = Field(
@@ -57,7 +57,6 @@ class TrainerConfig(BaseSettings):
         description="Device to use when training"
     )
 
-
 class Trainer:
     """
     Trainer class. Not as flexible as the Huggingface one, but gets the job
@@ -65,6 +64,7 @@ class Trainer:
     """
     def __init__(self, config: TrainerConfig):
         self.config: TrainerConfig = config
+        self.evaluate_callback = noop
 
     def init_wandb(self, model):
         conf = {"trainer": dict(self.config), "model": dict(model.config)}
@@ -157,7 +157,7 @@ class Trainer:
             _, loss_ = model(**modelargs)
             loss = loss + loss_ / len(test_dataloader)
         wandb.log({"loss/validation": loss.item()})
-        print(f"Test loss: {loss.item()}\n")
+        self.evaluate_callback(model, loss_train, test_dataloader)
 
     def save_checkpoint(self, model, optim, step_counter):
         savedir = Path(self.config.checkpoint_dir)
@@ -181,4 +181,6 @@ class Trainer:
         dl = skip_first_batches(dataloader, n_steps_in_current_epoch)
 
         return step, dl
-    
+
+    def set_evaluate_callback(self, callback):
+        self.evaluate_callback = callback

@@ -14,7 +14,9 @@ authors = [
 dependencies = [
     "torch",
     "numpy",
-    "wandb"
+    "wandb",
+    "pydantic-settings",
+    "accelerate"
 ]
 
 [project.urls]

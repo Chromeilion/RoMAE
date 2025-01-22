@@ -27,7 +27,6 @@ class SEFTConfig(BaseSettings):
     depth: int = Field(12)
     mlp_ratio: float = Field(4.)
     attn_drop_rate: float = Field(0.)
-    norm_layer: Callable[[Any], Any] = Field(nn.LayerNorm)
     init_values: float = Field(0.)
     init_scale: float = Field(0.)
     head_drop_rate: float = Field(0.)
@@ -56,7 +55,7 @@ class SEFT(nn.Module):
             transformer_layer,
             num_layers=config.depth
         )
-        self.fc_norm = config.norm_layer(config.d_model)
+        self.fc_norm = nn.LayerNorm(config.d_model)
         self.head_dropout = nn.Dropout(config.head_drop_rate)
         self.head = nn.Linear(config.d_model, config.num_classes)
         self.projection = nn.Linear(config.tubelet_size[0] * config.tubelet_size[1], config.d_model)
