@@ -33,7 +33,7 @@ class TrainerConfig(BaseSettings):
         description="Where to save the model throughout training"
     )
     num_dataset_workers: int = Field(
-        os.cpu_count()//2 - 1,
+        os.cpu_count() - 1,
         description="Number of dataloader workers"
     )
     run_name: str = Field(
@@ -98,14 +98,17 @@ class Trainer:
             batch_size=self.config.batch_size,
             num_workers=self.config.num_dataset_workers,
             pin_memory=True,
-            collate_fn=self.config.collate_fn
+            shuffle=True,
+            collate_fn=self.config.collate_fn,
+            prefetch_factor=2,
         )
         test_dataloader = torch.utils.data.DataLoader(
             test_dataset,
             batch_size=self.config.batch_size,
             num_workers=self.config.num_dataset_workers,
             pin_memory=True,
-            collate_fn=self.config.collate_fn
+            collate_fn=self.config.collate_fn,
+            prefetch_factor=2
         )
         optim = self.get_optim()(
             model.parameters(),
