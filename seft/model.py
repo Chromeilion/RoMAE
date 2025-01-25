@@ -1,8 +1,11 @@
-from typing import Callable, Any
+import math
+from pathlib import Path
+import json
 
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from safetensors.torch import load_file
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -59,7 +62,7 @@ class SEFT(nn.Module):
         self.head_dropout = nn.Dropout(config.head_drop_rate)
         self.head = nn.Linear(config.d_model, config.num_classes)
         self.projection = nn.Linear(config.tubelet_size[0] * config.tubelet_size[1], config.d_model)
-        self.pos_embedding = nn.Parameter(torch.zeros(config.max_len, config.d_model))
+        self.pos_embedding = PositionalEncoding(config.d_model, config.drop_rate, config.max_len)
         self.cls = nn.Parameter(torch.zeros(config.d_model))
 
     def patchify(self, x):
@@ -88,7 +91,7 @@ class SEFT(nn.Module):
         x = self.patchify(values)
         x = self.projection(x)
         x = torch.cat([self.cls.expand(B, 1, -1), x], dim=1)
-        x += self.pos_embedding[positions]
+        x = self.pos_embedding(x, positions)
         x = self.pos_drop(x)
         x = self.encoder(x, src_key_padding_mask=pad_mask)
         x = self.fc_norm(x[:, 0, :])
@@ -100,3 +103,43 @@ class SEFT(nn.Module):
             loss = F.cross_entropy(logits, label)
 
         return logits, loss
+
+    @staticmethod
+    def load_from_checkpoint(checkpoint_dir):
+        checkpoint_dir = Path(checkpoint_dir)
+        with open(checkpoint_dir/"model_config.json", "r") as f:
+            config_json = json.load(f)
+
+        config = SEFTConfig(**config_json)
+        model = SEFT(config)
+        state_dict = load_file(checkpoint_dir/"model.safetensors")
+        model.load_state_dict(state_dict)
+        return model
+
+
+class PositionalEncoding(nn.Module):
+    """
+    Based on the original encodings used in the paper.
+
+    References:
+    PyTorch: https://pytorch.org/tutorials/beginner/transformer_tutorial.html
+    """
+    def __init__(self, d_model: int, dropout: float = 0.1, max_len: int = 2000):
+        super().__init__()
+        self.dropout = nn.Dropout(p=dropout)
+
+        position = torch.arange(max_len).unsqueeze(1)
+        div_term = torch.exp(torch.arange(0, d_model, 2) * (-math.log(10000.0) / d_model))
+        pe = torch.zeros(max_len, d_model)
+        pe[:, 0::2] = torch.sin(position * div_term)
+        pe[:, 1::2] = torch.cos(position * div_term)
+        self.register_buffer('pe', pe)
+
+    def forward(self, x: torch.Tensor, idxs: torch.Tensor) -> torch.Tensor:
+        """
+        Arguments:
+            x: Tensor, shape ``[seq_len, batch_size, embedding_dim]``
+        """
+        x = x + self.pe[idxs]
+        return self.dropout(x)
+

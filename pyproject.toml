@@ -16,7 +16,8 @@ dependencies = [
     "numpy",
     "wandb",
     "pydantic-settings",
-    "accelerate"
+    "accelerate",
+    "safetensors"
 ]
 
 [project.urls]
