@@ -70,7 +70,7 @@ class TrainerConfig(BaseSettings):
         description="Maximum number of checkpoints to keep saved on disk"
     )
     gradient_clip: Optional[float] = Field(
-        1.0,
+        5.0,
         description="Gradient clipping value"
     )
     random_seed: int = Field(42)
@@ -183,10 +183,10 @@ class Trainer:
                         )
                     optim.step()
 
-                    if step_counter % self.config.save_every == 0 and accelerator.is_main_process:
+                    if step_counter % self.config.save_every == 0 and accelerator.is_main_process and step_counter > 0:
                         with torch.no_grad():
                             self.save_checkpoint(accelerator, model, step_counter)
-                    if step_counter % self.config.eval_every == 0 and accelerator.is_main_process:
+                    if step_counter % self.config.eval_every == 0 and accelerator.is_main_process and step_counter > 0:
                         with torch.no_grad():
                             model.eval()
                             self.evaluate(model, loss, test_dataloader, optim, step_counter)
@@ -195,6 +195,14 @@ class Trainer:
                     scheduler.step()
                     step_counter += 1
                     pbar.update(1)
+
+        if accelerator.is_main_process:
+            with torch.no_grad():
+                model.eval()
+                self.evaluate(model, loss, test_dataloader, optim,
+                              step_counter)
+                self.save_checkpoint(accelerator, model, step_counter)
+                model.train()
 
     def evaluate(self, model, loss_train, test_dataloader, optim, step):
         grads = [
