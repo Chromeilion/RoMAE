@@ -126,6 +126,17 @@ class SEFT(nn.Module):
 
         self.loss_fn = nn.CrossEntropyLoss()
         self.register_buffer('zeros', torch.zeros(1, dtype=torch.bool))
+        self._init_weights(self)
+
+
+    def _init_weights(self, m):
+        if isinstance(m, nn.Linear):
+            torch.trunc_normal_(m.weight, std=.02)
+            if isinstance(m, nn.Linear) and m.bias is not None:
+                nn.init.constant_(m.bias, 0)
+        elif isinstance(m, nn.LayerNorm):
+            nn.init.constant_(m.bias, 0)
+            nn.init.constant_(m.weight, 1.0)
 
     def patchify(self, x):
         """
