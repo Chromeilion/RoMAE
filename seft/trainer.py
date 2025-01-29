@@ -84,11 +84,16 @@ class Trainer:
     def __init__(self, config: TrainerConfig):
         self.config: TrainerConfig = config
         self.evaluate_callback = noop
+        self.post_train_hook = noop
+        self.run = None
 
     def init_wandb(self, model):
         conf = {"trainer": dict(self.config), "model": dict(model.config)}
-        wandb.init(project=self.config.project_name, name=self.config.run_name,
-                   config=conf)
+        self.run = wandb.init(
+            project=self.config.project_name,
+            name=self.config.run_name,
+            config=conf
+        )
 
     def get_optim(self):
         match self.config.optimizer:
@@ -157,7 +162,6 @@ class Trainer:
             model, optim, train_dataloader, scheduler,
             device_placement=[True, False, True, False]
         )
-        accelerator.register_for_checkpointing(scheduler)
 
         step_counter = 0
         current_epoch = 0
@@ -175,9 +179,9 @@ class Trainer:
                     optim.zero_grad()
                     # The model is expected to return its own loss
                     _, loss = model(**modelargs)
-                    loss.backward()
+                    accelerator.backward(loss)
                     if self.config.gradient_clip is not None:
-                        torch.nn.utils.clip_grad_norm_(
+                        accelerator.clip_grad_norm_(
                             model.parameters(),
                             self.config.gradient_clip
                         )
@@ -202,7 +206,15 @@ class Trainer:
                 self.evaluate(model, loss, test_dataloader, optim,
                               step_counter)
                 self.save_checkpoint(accelerator, model, step_counter)
+                self.post_train_hook(model, self.run)
                 model.train()
+            self.run.finish()
+
+    def post_train(self, *args, **kwargs):
+        self.post_train_hook(*args, **kwargs)
+
+    def set_post_train_hook(self, hook):
+        self.post_train_hook = hook
 
     def evaluate(self, model, loss_train, test_dataloader, optim, step):
         grads = [
@@ -211,9 +223,9 @@ class Trainer:
             if param.grad is not None
         ]
         norm = torch.cat(grads).norm()
-        wandb.log({"train/lr": optim.param_groups[0]["lr"]}, step=step)
-        wandb.log({"train/gradient_norm": norm}, step=step)
-        wandb.log({"loss/train": loss_train.item()}, step=step)
+        self.run.log({"train/lr": optim.param_groups[0]["lr"]}, step=step)
+        self.run.log({"train/gradient_norm": norm}, step=step)
+        self.run.log({"loss/train": loss_train.item()}, step=step)
         print(f"Train loss: {loss_train.item()}\n")
         loss = 0
         for modelargs in tqdm.tqdm(test_dataloader, desc="Evaluating"):
@@ -221,7 +233,7 @@ class Trainer:
                          modelargs.items()}
             _, loss_ = model(**modelargs)
             loss = loss + loss_ / len(test_dataloader)
-        wandb.log({"loss/validation": loss.item()}, step=step)
+        self.run.log({"loss/validation": loss.item()}, step=step)
         self.evaluate_callback(model, loss_train, test_dataloader)
 
     def save_checkpoint(self, accelerator: Accelerator, model, step_counter):

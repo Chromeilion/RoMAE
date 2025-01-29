@@ -10,6 +10,9 @@ from safetensors.torch import load_file
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+from seft.positional_embeddings import RoPENd, AbsoluteSinCosine
+from seft.utils import RMSNorm
+
 
 class ModelConfig(BaseSettings):
     model_config = SettingsConfigDict(
@@ -20,7 +23,7 @@ class ModelConfig(BaseSettings):
     d_model: int = Field(768)
     nhead: int = Field(12)
     n_channels: int = Field(1)
-    dim_feedforward: int = Field(3072)
+    dim_feedforward: Optional[int] = Field(None)
     activation: str = Field("gelu")
     hidden_dropout_prob: float = Field(0.1)
     attention_probs_dropout_prob: float = Field(0.1)
@@ -28,6 +31,7 @@ class ModelConfig(BaseSettings):
     layer_norm_eps: float = Field(1e-12)
     max_len: int = Field(1500)
     drop_rate: float = Field(0.)
+    pos_drop: float = Field(0.)
     drop_path_rate: float = Field(0.)
     depth: int = Field(12)
     mlp_ratio: float = Field(4.)
@@ -40,50 +44,6 @@ class ModelConfig(BaseSettings):
     pos_encoding: str = Field("relative")
     multiple_of: int = Field(2)
 
-
-class RoPENd(torch.nn.Module):
-    """N-dimensional Rotary Positional Embedding."""
-
-    def __init__(self, n_dims, d_model, base=10000):
-        super(RoPENd, self).__init__()
-
-        k_max = d_model // (2 * n_dims)
-        self.head_dim = d_model
-        self.x_shape = None
-
-        assert d_model % k_max == 0, f'shape[-1] ({d_model}) is not divisible by 2 * len(shape[:-1]) ({2 * n_dims})'
-
-        self.buff = self.register_buffer("theta_ks", 1 / (
-                    base ** (torch.arange(k_max) / k_max)))
-
-    def build_angles(self, positions: list[torch.tensor]):
-        # create a stack of angles multiplied by position
-        angles = torch.stack([
-            torch.cat(
-                [t.unsqueeze(-1) * self.theta_ks for t in torch.meshgrid(
-                    p, indexing='ij')], dim=-1) for p in zip(*positions)])
-        # convert to complex number to allow easy rotation
-        rotations = torch.polar(torch.ones_like(angles), angles)
-        return rotations
-
-    def set_x_shape(self, x_shape):
-        self.x_shape = x_shape
-
-    def forward(self, x, positions: torch.tensor):
-        if self.x_shape is None:
-            raise ValueError(
-                "x_shape must be set before the first forward pass")
-        B, N, H, E = x.shape
-        cls = x[:, 0]
-        # Reshape the input and ignore the CLS token
-        x = x[:, 1:].view(B, *self.x_shape, H, E)
-
-        # convert input into complex numbers to perform rotation
-        x = torch.view_as_complex(x.reshape(*x.shape[:-1], -1, 2))
-        rotation = self.build_angles(positions)
-        pe_x = rotation[..., None, :] * x
-        x = torch.view_as_real(pe_x).view(B, N-1, H, E)
-        return torch.cat((cls.unsqueeze(1), x), dim=1)
 
 
 class SEFT(nn.Module):
@@ -110,32 +70,37 @@ class SEFT(nn.Module):
 
         proj_input_dim = config.tubelet_size[0] * config.tubelet_size[1] * config.tubelet_size[2] * config.n_channels
         self.projection = nn.Linear(proj_input_dim, config.d_model)
-
-        match config.pos_encoding:
-            case "absolute":
-                self.pos_embedding = PositionalEncoding(
-                    config.d_model,
-                    config.drop_rate,
-                    config.max_len
-                )
-            case "relative":
-                self.pos_embedding = RoPENd(
-                    3,
-                    config.d_model // config.nhead
-                )
+        self.pos_embedding = self._get_pos_embedding(config)
 
         self.loss_fn = nn.CrossEntropyLoss()
         self.register_buffer('zeros', torch.zeros(1, dtype=torch.bool))
         self._init_weights(self)
 
+    @staticmethod
+    def _get_pos_embedding(config):
+        match config.pos_encoding:
+            case "absolute":
+                return AbsoluteSinCosine(
+                    d_model=config.d_model,
+                    dropout=config.pos_drop,
+                    max_len=config.max_len
+                )
+            case "relative":
+                return RoPENd(
+                    n_dims=3,
+                    d_model=config.d_model // config.nhead,
+                    dropout=config.pos_drop
+                )
+            case _:
+                raise ValueError(f"Unknown pos_encoding: {config.pos_encoding}")
 
-    def _init_weights(self, m):
+    @staticmethod
+    def _init_weights(m):
         if isinstance(m, nn.Linear):
             torch.trunc_normal_(m.weight, std=.02)
             if isinstance(m, nn.Linear) and m.bias is not None:
                 nn.init.constant_(m.bias, 0)
-        elif isinstance(m, nn.LayerNorm):
-            nn.init.constant_(m.bias, 0)
+        elif isinstance(m, nn.RMSNorm):
             nn.init.constant_(m.weight, 1.0)
 
     def patchify(self, x):
@@ -161,11 +126,14 @@ class SEFT(nn.Module):
 
         x = self.projection(x)
 
+        pos_encoding = self.pos_embedding
         if self.config.pos_encoding == "absolute":
-            x = self.pos_embedding(x, positions)
-            x = self.pos_drop(x)
+            x = pos_encoding(x, positions)
+            positions = None
+            pos_encoding = None
 
         x = torch.cat((self.cls.expand(B, 1, -1), x), dim=1)
+
 
         if pad_mask is not None:
             pad_mask = torch.cat([self.zeros.expand(B, 1), pad_mask], dim=1)
@@ -180,7 +148,7 @@ class SEFT(nn.Module):
             pad_mask = torch.zeros((x.shape[1], x.shape[1]), device=x.device)
 
         for layer in self.layers:
-            x = layer(x, positions, self.pos_embedding, pad_mask)
+            x = layer(x, positions, pos_encoding, pad_mask)
 
         x = self.head_dropout(x)
         logits = self.head(x)
@@ -211,51 +179,6 @@ class SEFT(nn.Module):
     def load_weights(self, checkpoint_dir):
         state_dict = load_file(Path(checkpoint_dir)/"model.safetensors")
         self.load_state_dict(state_dict)
-
-
-class RMSNorm(torch.nn.Module):
-    def __init__(self, dim: int, eps: float = 1e-6):
-        """
-        Initialize the RMSNorm normalization layer.
-
-        Args:
-            dim (int): The dimension of the input tensor.
-            eps (float, optional): A small value added to the denominator for numerical stability. Default is 1e-6.
-
-        Attributes:
-            eps (float): A small value added to the denominator for numerical stability.
-
-        """
-        super().__init__()
-        self.eps = eps
-        self.weight = nn.Parameter(torch.ones(dim))
-
-    def _norm(self, x):
-        """
-        Apply the RMSNorm normalization to the input tensor.
-
-        Args:
-            x (torch.Tensor): The input tensor.
-
-        Returns:
-            torch.Tensor: The normalized tensor.
-
-        """
-        return x * torch.rsqrt(x.pow(2).mean(-1, keepdim=True) + self.eps)
-
-    def forward(self, x):
-        """
-        Forward pass through the RMSNorm layer.
-
-        Args:
-            x (torch.Tensor): The input tensor.
-
-        Returns:
-            torch.Tensor: The output tensor after applying RMSNorm.
-
-        """
-        output = self._norm(x.float()).type_as(x)
-        return output * self.weight
 
 
 class ClassificationHead(nn.Module):
@@ -323,9 +246,9 @@ class Attention(nn.Module):
     def forward(
             self,
             x: torch.Tensor,
-            positions: list[torch.tensor],
-            pos_emb: RoPENd,
-            mask: Optional[torch.Tensor],
+            positions: Optional[list[torch.tensor]] = None,
+            pos_emb: Optional[RoPENd] = None,
+            mask: Optional[torch.Tensor] = None,
     ):
         """
         Forward pass of the attention module.
@@ -347,7 +270,8 @@ class Attention(nn.Module):
         xk = xk.view(bsz, seqlen, self.n_kv_heads, self.head_dim)
         xv = xv.view(bsz, seqlen, self.n_kv_heads, self.head_dim)
 
-        xq, xk = pos_emb(xq, positions), pos_emb(xk, positions)
+        if pos_emb is not None:
+            xq, xk = pos_emb(xq, positions), pos_emb(xk, positions)
 
         xq = xq.transpose(1, 2)  # (bs, n_local_heads, seqlen, head_dim)
         keys = xk.transpose(1, 2)  # (bs, n_local_heads, cache_len + seqlen, head_dim)
@@ -404,9 +328,11 @@ class TransformerBlock(nn.Module):
         self.dim = args.d_model
         self.head_dim = args.d_model // args.nhead
         self.attention = Attention(args)
+
+        hidden_dim = args.dim_feedforward if args.dim_feedforward is not None else 4 * args.d_model
         self.feed_forward = FeedForward(
             dim=args.d_model,
-            hidden_dim=4 * args.d_model,
+            hidden_dim=hidden_dim,
             multiple_of=args.multiple_of
         )
         self.layer_id = layer_id
@@ -416,9 +342,9 @@ class TransformerBlock(nn.Module):
     def forward(
             self,
             x: torch.Tensor,
-            positions: int,
-            pos_embed: RoPENd,
-            mask: Optional[torch.Tensor],
+            positions: Optional[int] = None,
+            pos_embed: Optional[RoPENd] = None,
+            mask: Optional[torch.Tensor] = None
     ):
         """
         Perform a forward pass through the TransformerBlock.
@@ -438,31 +364,3 @@ class TransformerBlock(nn.Module):
         )
         out = h + self.feed_forward(self.ffn_norm(h))
         return out
-
-
-class PositionalEncoding(nn.Module):
-    """
-    Based on the original encodings used in the paper.
-
-    References:
-    PyTorch: https://pytorch.org/tutorials/beginner/transformer_tutorial.html
-    """
-    def __init__(self, d_model: int, dropout: float = 0.1, max_len: int = 2000):
-        super().__init__()
-        self.dropout = nn.Dropout(p=dropout)
-
-        position = torch.arange(max_len).unsqueeze(1)
-        div_term = torch.exp(torch.arange(0, d_model, 2) * (-math.log(10000.0) / d_model))
-        pe = torch.zeros(max_len, d_model)
-        pe[:, 0::2] = torch.sin(position * div_term)
-        pe[:, 1::2] = torch.cos(position * div_term)
-        self.register_buffer('pe', pe)
-
-    def forward(self, x: torch.Tensor, idxs: torch.Tensor) -> torch.Tensor:
-        """
-        Arguments:
-            x: Tensor, shape ``[seq_len, batch_size, embedding_dim]``
-            idxs: Tensor, shape ``[batch_size, seq_len]``
-        """
-        x = x + self.pe[idxs]
-        return self.dropout(x)
