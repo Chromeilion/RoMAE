@@ -115,15 +115,34 @@ class SEFT(nn.Module):
         W_p = W // self.config.tubelet_size[2]
         N = T_p * H_p * W_p
         x = x.reshape(B, T_p, H_p, W_p, *self.config.tubelet_size, C)
-        return x.reshape(B, N, -1), (T_p, H_p, W_p)
+        return x.reshape(B, N, -1), torch.tensor((T_p, H_p, W_p), device=x.device)
+
+    def _prepare_positions(self, B, T, H, W):
+        """Take in a bunch of potentially None positions and replace None's
+        with position zero.
+        """
+        n_positions = 0
+        for i in [T, H, W]:
+            if i is not None:
+                n_positions = i.shape[1]
+                device = i.device
+                break
+
+        positions = []
+        for i, p in enumerate([T, H, W]):
+            if p is None:
+                positions.append(torch.zeros((B, n_positions), device=device))
+            else:
+                positions.append(p)
+
+        return positions
 
     def forward(self, values, T=None, H=None, W=None, pad_mask=None, label=None):
-        positions = [i for i in [T, H, W] if i is not None]
         B = values.shape[0]
 
         x, shape = self.patchify(values)
+        positions = self._prepare_positions(B, T, H, W)
         self.pos_embedding.set_x_shape(shape)
-
         x = self.projection(x)
 
         pos_encoding = self.pos_embedding
@@ -132,23 +151,26 @@ class SEFT(nn.Module):
             positions = None
             pos_encoding = None
 
+        if pad_mask is not None:
+            assert pad_mask.shape == x.shape[:2], (
+                f"Pad mask has the wrong shape ({pad_mask.shape}), it should "
+                f"have shape {x.shape[:2]}"
+            )
+            attn_mask = torch.full(
+                (B, x.shape[1]+1, x.shape[1]+1), float("-inf"), device=x.device
+            )
+            pad_mask = ~torch.cat((self.zeros.repeat(B)[..., None], pad_mask), dim=1)
+            # The attention mask only needs to be applied to the columns (keys)
+            attn_mask[pad_mask] = 0
+            attn_mask = attn_mask.permute([0, 2, 1])[:, None, ...]
+        else:
+            attn_mask = torch.zeros((1, x.shape[1], x.shape[1]), device=x.device)
+
         x = torch.cat((self.cls.expand(B, 1, -1), x), dim=1)
 
 
-        if pad_mask is not None:
-            pad_mask = torch.cat([self.zeros.expand(B, 1), pad_mask], dim=1)
-            pad_mask = F.pad(pad_mask, (0, 1)).unsqueeze(1).unsqueeze(2)
-
-            neg_inf = torch.full(
-                (x.shape[1], x.shape[1]), float("-inf"), device=x.device
-            )
-            neg_inf[~pad_mask] = 0
-
-        else:
-            pad_mask = torch.zeros((x.shape[1], x.shape[1]), device=x.device)
-
         for layer in self.layers:
-            x = layer(x, positions, pos_encoding, pad_mask)
+            x = layer(x, positions, pos_encoding, attn_mask)
 
         x = self.head_dropout(x)
         logits = self.head(x)

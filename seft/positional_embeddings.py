@@ -16,9 +16,13 @@ class BasePosEmbedding(ABC):
     """Abstract base class from which positional embeddings should inherit.
     """
     def __init__(self):
-        self.x_shape: Optional[tuple[int, int, int]] = None
+        self.x_shape: Optional[torch.Tensor] = None
 
-    def set_x_shape(self, shape: tuple[int, int, int]) -> None:
+    def set_x_shape(self, shape: torch.Tensor) -> None:
+        if shape.shape != torch.Size([3]):
+            raise ValueError(
+                f"Expected shape to be [3], got {shape.shape}"
+            )
         self.x_shape = shape
 
 
@@ -29,6 +33,7 @@ class RoPENd(nn.Module, BasePosEmbedding):
         super(RoPENd, self).__init__()
         k_max = d_model // (2 * n_dims)
         self.head_dim = d_model
+        self.subdim = d_model // n_dims
         self.dropout = nn.Dropout(dropout)
 
         assert d_model % k_max == 0, f'shape[-1] ({d_model}) is not divisible by 2 * len(shape[:-1]) ({2 * n_dims})'
@@ -39,18 +44,19 @@ class RoPENd(nn.Module, BasePosEmbedding):
         self.prev_positions = None
         self.cache = None
 
-    def build_angles(self, positions: POSITIONS):
+    def build_angles(self, B, positions: POSITIONS):
         if self.prev_positions is not None:
             if all(torch.equal(i, j) for i, j in zip(positions, self.prev_positions)):
                 return self.cache
 
-        # create a stack of angles multiplied by position
-        angles = torch.stack([
-            torch.cat(
-                [t.unsqueeze(-1) * self.theta_ks for t in torch.meshgrid(
-                    p, indexing='ij')], dim=-1) for p in zip(*positions)])
-        # convert to complex number to allow easy rotation
-        rotations = torch.polar(torch.ones_like(angles), angles)
+        rotations = []
+        for i in positions:
+            freqs = torch.bmm(i.unsqueeze(2), self.theta_ks[None, ...].repeat(B, 1).unsqueeze(1)).float()
+            freqs_cis = torch.polar(torch.ones_like(freqs), freqs)  # complex64
+            rotations.append(freqs_cis)
+
+        rotations = torch.cat(rotations, dim=2)
+
         self.cache = rotations
         self.prev_positions = positions
         return rotations
@@ -63,15 +69,18 @@ class RoPENd(nn.Module, BasePosEmbedding):
 
         # Take out the CLS token
         cls = x[:, 0]
-        # Reshape the input to recover original shape and ignore the CLS token
-        x = x[:, 1:].view(B, *self.x_shape, H, E)
+
+
+        rotations = self.build_angles(B, positions)
+
         # convert input into complex numbers to perform rotation
         x = torch.view_as_complex(x.reshape(*x.shape[:-1], -1, 2))
-        rotation = self.build_angles(positions)
-        # Add in a dimension for broadcasting and apply rotation
-        pe_x = rotation[..., None, :] * x
-        x = torch.view_as_real(pe_x).view(B, N-1, H, E)
-        x = torch.cat((cls.unsqueeze(1), x), dim=1)
+
+        # Ignore the CLS token when applying positional information
+        # Also add a dummy dim to broadcast with all heads
+        x_ = x[:, 1:, ...] * rotations[..., None, :]
+        x[:, 1:, ...] = x_
+        x = torch.view_as_real(x).reshape(B, N, H, E)
 
         return self.dropout(x)
 
