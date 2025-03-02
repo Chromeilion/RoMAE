@@ -7,19 +7,14 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from safetensors.torch import load_file
-from pydantic import Field
+from pydantic import Field, BaseModel
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from seft.positional_embeddings import RoPENd, AbsoluteSinCosine
 from seft.utils import RMSNorm
 
 
-class ModelConfig(BaseSettings):
-    model_config = SettingsConfigDict(
-        env_prefix='SEFT_MODEL_',
-        env_file='.env',
-        extra="ignore"
-    )
+class EncoderConfig(BaseModel):
     d_model: int = Field(768)
     nhead: int = Field(12)
     n_channels: int = Field(1)
@@ -38,15 +33,78 @@ class ModelConfig(BaseSettings):
     attn_drop_rate: float = Field(0.)
     init_values: float = Field(0.)
     init_scale: float = Field(0.)
-    head_drop_rate: float = Field(0.)
-    dim_output: Optional[int] = Field(None)
     tubelet_size: tuple[int, int, int] = Field((1, 1, 16))
     pos_encoding: str = Field("relative")
     multiple_of: int = Field(2)
 
 
+class RoBiTEConfig(BaseSettings):
+    model_config = SettingsConfigDict(
+        env_prefix='ROBITE_BASIC_',
+        env_file='.env',
+        extra="ignore",
+        cli_parse_args=True,
+        cli_ignore_unknown_args=True
+    )
+    dim_output: Optional[int]
+    encoder_config: EncoderConfig
+    head_drop_rate: float = Field(0.)
 
-class SEFT(nn.Module):
+
+class InterpolationConfig(BaseSettings):
+    model_config = SettingsConfigDict(
+        env_prefix='ROBITE_INTERP_',
+        env_file='.env',
+        extra="ignore",
+        cli_parse_args=True
+    )
+    encoder_config: EncoderConfig
+    decoder_config: EncoderConfig
+    mask_ratio: float = Field(0.)
+
+
+class SEFTForInterpolation(nn.Module):
+    def __init__(self, config: InterpolationConfig, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        if config.d_model % 2 != 0:
+            raise ValueError(f"Cannot use sin/cos positional encoding with "
+                             f"an odd dim ({config.d_model})")
+        self.config: InterpolationConfig = config
+        self.pos_drop = nn.Dropout(p=config.drop_rate)
+        self.n_layers = config.depth
+
+        self.layers = torch.nn.ModuleList()
+        for layer_id in range(self.n_layers):
+            self.layers.append(TransformerBlock(layer_id, config))
+
+        self.norm = RMSNorm(config.d_model, eps=config.layer_norm_eps)
+
+        self.head_dropout = nn.Dropout(config.head_drop_rate)
+        self.cls = nn.Parameter(torch.zeros(config.d_model))
+        self.head = lambda x: x
+        if config.dim_output is not None:
+            self.head = ClassificationHead(config)
+
+        proj_input_dim = config.tubelet_size[0] * config.tubelet_size[1] * config.tubelet_size[2] * config.n_channels
+        self.projection = nn.Linear(proj_input_dim, config.d_model)
+        self.pos_embedding = self._get_pos_embedding(config)
+
+        self.loss_fn = nn.CrossEntropyLoss()
+        self.register_buffer('zeros', torch.zeros(1, dtype=torch.bool))
+        self._init_weights(self)
+
+
+class RoBiTE(nn.Module):
+    """
+    Basic RoBiTE model with an MLP head on top. Useful for regression and
+    classification tasks.
+    """
+    def __init__(self, config: InterpolationModelConfig, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.config: RoBiTEConfig = config
+
+
+class Encoder(nn.Module):
     def __init__(self, config: ModelConfig, *args, **kwargs):
         super().__init__(*args, **kwargs)
         if config.d_model % 2 != 0:
