@@ -24,6 +24,14 @@ class BasePosEmbedding(ABC):
         self.x_shape = shape
 
 
+class DummyPosEmbedding(nn.Module, BasePosEmbedding):
+    """To be used as a "None" positional embedding.
+    """
+    @staticmethod
+    def forward(x, *_, **__):
+        return x
+
+
 class RoPENd(nn.Module, BasePosEmbedding):
     """N-dimensional Rotary Positional Embedding.
     """

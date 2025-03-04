@@ -10,7 +10,11 @@ from safetensors.torch import load_file
 from pydantic import Field, BaseModel
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
-from robite.positional_embeddings import RoPENd, AbsoluteSinCosine
+from robite.positional_embeddings import (
+    RoPENd,
+    AbsoluteSinCosine,
+    DummyPosEmbedding
+)
 from robite.utils import RMSNorm
 
 
@@ -19,25 +23,28 @@ class RoBiTEBaseConfig(BaseSettings):
     RoBiTE base configuration.
     """
     pos_encoding: Literal["ropend", "absolute"] = Field("ropend")
+    # Dropout to be applied to the positional encoding
+    pos_drop: float = Field(0.)
+    # Maximum length of an input, used when precomputing static positional
+    # encodings.
+    max_len: int = Field(1500)
     tubelet_size: tuple[int, int, int] = Field((1, 1, 16))
-    d_model: int = Field(768)
+    n_channels: int = Field(1)
 
 
 class EncoderConfig(BaseModel):
     """
     RoBiTE Transformer Encodre configuration values.
     """
+    d_model: int = Field(768)
     nhead: int = Field(12)
-    n_channels: int = Field(1)
     dim_feedforward: Optional[int] = Field(None)
     activation: str = Field("gelu")
     hidden_dropout_prob: float = Field(0.1)
     attention_probs_dropout_prob: float = Field(0.1)
     initializer_range: float = Field(0.02)
     layer_norm_eps: float = Field(1e-12)
-    max_len: int = Field(1500)
     drop_rate: float = Field(0.)
-    pos_drop: float = Field(0.)
     drop_path_rate: float = Field(0.)
     depth: int = Field(12)
     mlp_ratio: float = Field(4.)
@@ -77,36 +84,38 @@ class InterpolationConfig(RoBiTEBaseConfig):
     mask_ratio: float = Field(0.)
 
 
-def _get_inpt_pos_embedding(config):
+def _get_inpt_pos_embedding(pos_encoding: str, d_model: int,
+                            pos_drop: float, max_len: int) -> nn.Module:
     """
     Parse the config and return the relevant positional encoding function to
     be applied at the input.
     """
-    match config.pos_encoding:
+    match pos_encoding:
         case "absolute":
             return AbsoluteSinCosine(
-                d_model=config.d_model,
-                dropout=config.pos_drop,
-                max_len=config.max_len
+                d_model=d_model,
+                dropout=pos_drop,
+                max_len=max_len
             )
         case _:
-            return None
+            return DummyPosEmbedding()
 
 
-def _get_attn_pos_embedding(config):
+def _get_attn_pos_embedding(pos_encoding: str, d_model: int,
+                            nhead: int, pos_drop: float) -> nn.Module:
     """
     Parse the config and return the relevant positional encoding function to
     be applied at each attention block.
     """
-    match config.pos_encoding:
+    match pos_encoding:
         case "ropend":
             return RoPENd(
                 n_dims=3,
-                d_model=config.d_model // config.nhead,
-                dropout=config.pos_drop
+                d_model=d_model // nhead,
+                dropout=pos_drop
             )
         case _:
-            return None
+            return DummyPosEmbedding()
 
 
 def _init_weights(m):
@@ -137,22 +146,43 @@ class RoBiTEBase(nn.Module):
     Base RoBiTE model class. Contains logic for positional encoding switching
     (relative vs absolute), weight initialization, patchification, and more.
     """
-    def __init__(self, config: RoBiTEBaseConfig, *args, **kwargs):
+    def __init__(self, config: RoBiTEBaseConfig, d_model: int, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        # Positional embeddings applied before encoder forward pass
-        self._inpt_pos_embedding = self._get_inpt_pos_embedding(config)
-        # Positional embeddings applied within each attention block
-        self._attn_pos_embedding = self._get_attn_pos_embedding(config)
-
         self.loss_fn: Optional[Callable[[torch.Tensor, torch.Tensor], torch.Tensor]]
         self.loss_fn = None
-
         # Projection from tubelets to embedding dimension
-        proj_input_dim = config.tubelet_size[0] * config.tubelet_size[1] * config.tubelet_size[2] * config.n_channels
-        self.projection = nn.Linear(proj_input_dim, config.d_model)
+        proj_input_dim = (
+                config.tubelet_size[0] * config.tubelet_size[1] *
+                config.tubelet_size[2] * config.n_channels
+        )
+        self.projection = nn.Linear(proj_input_dim, d_model)
+
+        self._inpt_pos_embedding, self._attn_pos_embedding = None, None
 
         # Useful for generating the attention mask.
         self.register_buffer('zeros', torch.zeros(1, dtype=torch.bool))
+
+    @staticmethod
+    def get_pos_embs(config: RoBiTEBaseConfig, nhead: int, d_model: int) -> tuple[nn.Module, nn.Module]:
+        """Load positional embeddings based on the provided config.
+        """
+        # Positional embeddings applied before encoder forward pass, usually
+        # absolute
+        inpt_pos_embedding = _get_inpt_pos_embedding(
+            pos_encoding=config.pos_encoding,
+            d_model=d_model,
+            pos_drop=config.pos_drop,
+            max_len=config.max_len
+        )
+        # Positional embeddings applied within each attention block, usually
+        # relative (RoPE)
+        attn_pos_embedding = _get_attn_pos_embedding(
+            pos_encoding=config.pos_encoding,
+            d_model=d_model,
+            nhead=nhead,
+            pos_drop=config.pos_drop
+        )
+        return inpt_pos_embedding, attn_pos_embedding
 
     def patchify(self, x):
         """
@@ -167,26 +197,6 @@ class RoBiTEBase(nn.Module):
         n = t_p * h_p * w_p
         x = x.reshape(b, t_p, h_p, w_p, *self.config.tubelet_size, c)
         return x.reshape(b, n, -1), torch.tensor((t_p, h_p, w_p), device=x.device)
-
-    def apply_pos_shape(self, shape):
-        if self.inpt_pos_embedding is not None:
-            self.inpt_pos_embedding.set_x_shape(shape)
-        if self.attn_pos_embedding is not None:
-            self.attn_pos_embedding.set_x_shape(shape)
-
-    def apply_pos_inpt(self, x, positions):
-        """Apply the input positional embedding if it is not None.
-        """
-        if self.inpt_pos_embedding is not None:
-            return self.inpt_pos_embedding(x, positions)
-        return x
-
-    def apply_pos_attn(self, x, positions):
-        """Apply the attention positional embedding if it is not None.
-        """
-        if self.attn_pos_embedding is not None:
-            return self.attn_pos_embedding(x, positions)
-        return x
 
     @staticmethod
     def prepare_positions(b, t, h, w):
@@ -258,18 +268,20 @@ class RoBiTE(RoBiTEBase):
     classification tasks.
     """
     def __init__(self, config: RoBiTEConfig, *args, **kwargs):
-        super().__init__(config=config, *args, **kwargs)
+        super().__init__(config=config, d_model=config.encoder_config.d_model, *args, **kwargs)
         self.config: RoBiTEConfig = config
         self.encoder: nn.Module = Encoder(
-            d_model=config.d_model,
             config=config.encoder_config
         )
-        self.cls = nn.Parameter(torch.zeros(config.d_model))
+        self.cls = nn.Parameter(torch.zeros(config.encoder_config.d_model))
         self.head = ClassificationHead(
-            d_model=config.d_model,
+            d_model=config.encoder_config.d_model,
             d_output=config.dim_output,
-            layer_norm_eps=config.encoder.layer_norm_eps,
+            layer_norm_eps=config.encoder_config.layer_norm_eps,
             head_drop_rate=config.head_drop_rate
+        )
+        self.inpt_pos_embedding, self.attn_pos_embedding = self.get_pos_embs(
+            config, nhead=config.encoder_config.nhead, d_model=config.encoder_config.d_model
         )
         _init_weights(self)
 
@@ -286,13 +298,21 @@ class RoBiTE(RoBiTEBase):
         x, shape = self.patchify(values)
         positions = self.prepare_positions(b, t, h, w)
         # Precompute positional embedding matrices if applicable
-        self.apply_pos_shape(shape)
+        self.inpt_pos_embedding.set_x_shape(shape)
+        self.attn_pos_embedding.set_x_shape(shape)
+
         x = self.projection(x)
-        x = self.apply_pos_inpt(x, positions)
+        x = self.inpt_pos_embedding(x, positions)
         attn_mask = self.get_attn_mask(x.shape, x.device, pad_mask)
         # Add classification token to the beginning of the sequence
         x = torch.cat((self.cls.expand(b, 1, -1), x), dim=1)
-        x = self.encoder(x, attn_mask=attn_mask)
+        # Encoder forward pass
+        x = self.encoder(
+            x,
+            positions=positions,
+            pos_encoding=self.attn_pos_embedding,
+            attn_mask=attn_mask
+        )
 
         # Apply head to get logits and calculate loss
         logits = self.head(x)
@@ -333,11 +353,11 @@ class SEFTForInterpolation(nn.Module):
 
 
 class Encoder(nn.Module):
-    def __init__(self, config: EncoderConfig, d_model: int, *args, **kwargs):
+    def __init__(self, config: EncoderConfig, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        if d_model % 2 != 0:
+        if config.d_model % 2 != 0:
             raise ValueError(f"Cannot use sin/cos positional encoding with "
-                             f"an odd dim ({d_model})")
+                             f"an odd dim ({config.d_model})")
         self.config: EncoderConfig = config
         self.n_layers = config.depth
 
@@ -345,7 +365,7 @@ class Encoder(nn.Module):
         for layer_id in range(self.n_layers):
             self.layers.append(TransformerBlock(layer_id, config))
 
-        self.norm = RMSNorm(d_model, eps=config.layer_norm_eps)
+        self.norm = RMSNorm(config.d_model, eps=config.layer_norm_eps)
 
     def forward(self, x, positions, pos_encoding, attn_mask=None):
         for layer in self.layers:
@@ -493,29 +513,31 @@ class FeedForward(nn.Module):
 
 
 class TransformerBlock(nn.Module):
-    def __init__(self, layer_id: int, args: EncoderConfig):
+    def __init__(self, layer_id: int, config: EncoderConfig):
         """
         Initialize a TransformerBlock.
 
         Args:
-            layer_id (int): Identifier for the layer.
-            args (ModelArgs): Model configuration parameters.
+            layer_id : int
+                Identifier for the layer.
+            config : EncoderConfig
+                Model configuration parameters.
         """
         super().__init__()
-        self.n_heads = args.nhead
-        self.dim = args.d_model
-        self.head_dim = args.d_model // args.nhead
-        self.attention = Attention(args)
+        self.n_heads = config.nhead
+        self.dim = config.d_model
+        self.head_dim = config.d_model // config.nhead
+        self.attention = Attention(config)
 
-        hidden_dim = args.dim_feedforward if args.dim_feedforward is not None else 4 * args.d_model
+        hidden_dim = config.dim_feedforward if config.dim_feedforward is not None else 4 * config.d_model
         self.feed_forward = FeedForward(
-            dim=args.d_model,
+            dim=config.d_model,
             hidden_dim=hidden_dim,
-            multiple_of=args.multiple_of
+            multiple_of=config.multiple_of
         )
         self.layer_id = layer_id
-        self.attention_norm = RMSNorm(args.d_model, eps=args.layer_norm_eps)
-        self.ffn_norm = RMSNorm(args.d_model, eps=args.layer_norm_eps)
+        self.attention_norm = RMSNorm(config.d_model, eps=config.layer_norm_eps)
+        self.ffn_norm = RMSNorm(config.d_model, eps=config.layer_norm_eps)
 
     def forward(
             self,
