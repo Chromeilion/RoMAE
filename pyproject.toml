@@ -3,13 +3,13 @@ requires = ["setuptools", "setuptools-scm"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "SEFT"
-version = "0.0.1-alpha"
-description = "Sparse Early Fusion Transformer (SEFT) for spatio-temporal modalities."
+name = "RoBiTE"
+version = "0.0.2-alpha"
+description = "Rotary Bidirectional Transformer Encoder. For use with multi-dimensional sparse data."
 readme = "README.md"
 requires-python = ">=3.11"
 authors = [
-    {name = "Uros Zivanovic", email = "uki@cro.moe"}
+    {name = "Uros Zivanovic", email = "uros.zivanovic@studenti.units.it"}
 ]
 dependencies = [
     "torch",
@@ -24,4 +24,4 @@ dependencies = [
 Repository = "https://github.com/Chromeilion/SEFT"
 
 [tool.setuptools.packages.find]
-include = ["seft"]
+include = ["robite"]

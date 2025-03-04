@@ -10,8 +10,8 @@ from safetensors.torch import load_file
 from pydantic import Field, BaseModel
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
-from seft.positional_embeddings import RoPENd, AbsoluteSinCosine
-from seft.utils import RMSNorm
+from robite.positional_embeddings import RoPENd, AbsoluteSinCosine
+from robite.utils import RMSNorm
 
 
 class RoBiTEBaseConfig(BaseSettings):
@@ -55,8 +55,7 @@ class RoBiTEConfig(RoBiTEBaseConfig):
         env_prefix='ROBITE_BASIC_',
         env_file='.env',
         extra="ignore",
-        cli_parse_args=True,
-        cli_ignore_unknown_args=True
+        env_nested_delimiter='__'
     )
     dim_output: Optional[int]
     encoder_config: EncoderConfig
@@ -71,7 +70,7 @@ class InterpolationConfig(RoBiTEBaseConfig):
         env_prefix='ROBITE_INTERP_',
         env_file='.env',
         extra="ignore",
-        cli_parse_args=True
+        env_nested_delimiter='__'
     )
     encoder_config: EncoderConfig
     decoder_config: EncoderConfig
@@ -160,14 +159,14 @@ class RoBiTEBase(nn.Module):
         Expected input format: BTHW
         Converts the input video-like format to a sequence of patches
         """
-        B, T, C, H, W = x.shape
+        b, t, c, h, w = x.shape
 
-        T_p = T // self.config.tubelet_size[0]
-        H_p = H // self.config.tubelet_size[1]
-        W_p = W // self.config.tubelet_size[2]
-        N = T_p * H_p * W_p
-        x = x.reshape(B, T_p, H_p, W_p, *self.config.tubelet_size, C)
-        return x.reshape(B, N, -1), torch.tensor((T_p, H_p, W_p), device=x.device)
+        t_p = t // self.config.tubelet_size[0]
+        h_p = h // self.config.tubelet_size[1]
+        w_p = w // self.config.tubelet_size[2]
+        n = t_p * h_p * w_p
+        x = x.reshape(b, t_p, h_p, w_p, *self.config.tubelet_size, c)
+        return x.reshape(b, n, -1), torch.tensor((t_p, h_p, w_p), device=x.device)
 
     def apply_pos_shape(self, shape):
         if self.inpt_pos_embedding is not None:
@@ -201,6 +200,7 @@ class RoBiTEBase(nn.Module):
             raise AttributeError("All position tensors cannot be None, set at "
                                  "least one to a valid value!")
         n_positions = 0
+        device = None
         for i in pos:
             if i is not None:
                 n_positions = i.shape[1]
@@ -214,7 +214,7 @@ class RoBiTEBase(nn.Module):
                 positions.append(p)
         return positions
 
-    def get_attn_mask(self, x_shape: tuple[int, ...],
+    def get_attn_mask(self, x_shape: tuple[int, ...], device,
                       pad_mask: Optional[torch.Tensor] = None):
         """Generate the attention mask based on an input pad mask. If there is
         no pad mask, the attention mask will be all zeros
@@ -225,14 +225,14 @@ class RoBiTEBase(nn.Module):
                 f"have shape {x_shape[:2]}"
             )
             attn_mask = torch.full(
-                (x_shape[0], x_shape[1]+1, x_shape[1]+1), float("-inf"), device=pad_mask.device
+                (x_shape[0], x_shape[1]+1, x_shape[1]+1), float("-inf"), device=device
             )
             pad_mask = ~torch.cat((self.zeros.repeat(x_shape[0])[..., None], pad_mask), dim=1)
             # The attention mask only needs to be applied to the columns (keys)
             attn_mask[pad_mask] = 0
             attn_mask = attn_mask.permute([0, 2, 1])[:, None, ...]
         else:
-            attn_mask = torch.zeros((1, x_shape[1], x_shape[1]), device=pad_mask.device)
+            attn_mask = torch.zeros((1, x_shape[1], x_shape[1]), device=device)
         return attn_mask
 
     def set_loss_fn(self, loss_fn):
@@ -260,7 +260,10 @@ class RoBiTE(RoBiTEBase):
     def __init__(self, config: RoBiTEConfig, *args, **kwargs):
         super().__init__(config=config, *args, **kwargs)
         self.config: RoBiTEConfig = config
-        self.encoder: nn.Module = Encoder(config.encoder_config)
+        self.encoder: nn.Module = Encoder(
+            d_model=config.d_model,
+            config=config.encoder_config
+        )
         self.cls = nn.Parameter(torch.zeros(config.d_model))
         self.head = ClassificationHead(
             d_model=config.d_model,
@@ -286,7 +289,7 @@ class RoBiTE(RoBiTEBase):
         self.apply_pos_shape(shape)
         x = self.projection(x)
         x = self.apply_pos_inpt(x, positions)
-        attn_mask = self.get_attn_mask(x.shape, pad_mask)
+        attn_mask = self.get_attn_mask(x.shape, x.device, pad_mask)
         # Add classification token to the beginning of the sequence
         x = torch.cat((self.cls.expand(b, 1, -1), x), dim=1)
         x = self.encoder(x, attn_mask=attn_mask)
@@ -490,7 +493,7 @@ class FeedForward(nn.Module):
 
 
 class TransformerBlock(nn.Module):
-    def __init__(self, layer_id: int, args: ModelConfig):
+    def __init__(self, layer_id: int, args: EncoderConfig):
         """
         Initialize a TransformerBlock.
 

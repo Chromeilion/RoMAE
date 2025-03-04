@@ -5,8 +5,6 @@ from typing import Optional
 import torch
 import torch.nn as nn
 
-from seft.utils import RMSNorm
-
 
 # The 3D position of all embeddings is represented as 3 lists.
 POSITIONS = tuple[torch.Tensor, torch.Tensor, torch.Tensor]

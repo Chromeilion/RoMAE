@@ -7,7 +7,7 @@ import torch
 import json
 from typing import Any, Optional
 import tqdm
-from seft.utils import CosineLRScheduleWithWarmup
+from robite.utils import CosineLRScheduleWithWarmup
 import torch._dynamo
 import wandb
 from pydantic import Field
@@ -23,7 +23,7 @@ noop = lambda *_, **__: None
 
 class TrainerConfig(BaseSettings):
     model_config = SettingsConfigDict(
-        env_prefix='SEFT_TRAINER_',
+        env_prefix='ROBITE_TRAINER_',
         env_file='.env',
         extra="ignore"
     )

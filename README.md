@@ -1,3 +1,4 @@
-# Sparse Early Fusion Transformer (SEFT)
+# Rotary Bidirectional Transformer Encoder
 
-Implementation of the SEFT model, usable for sparse video-like modalities. 
+Implementation of the RoBiTE model, usable for various sparse multi-dimensional 
+datasets. 
