@@ -6,8 +6,8 @@ import torch
 import torch.nn as nn
 
 
-# The 3D position of all embeddings is represented as 3 lists.
-POSITIONS = tuple[torch.Tensor, torch.Tensor, torch.Tensor]
+# The 3D position of all embeddings is represented as a tensor with 3 rows.
+POSITIONS = torch.Tensor
 
 
 class BasePosEmbedding(ABC):
@@ -44,28 +44,28 @@ class RoPENd(nn.Module, BasePosEmbedding):
 
         assert d_model % k_max == 0, f'shape[-1] ({d_model}) is not divisible by 2 * len(shape[:-1]) ({2 * n_dims})'
 
-        self.buff = self.register_buffer("theta_ks", 1 / (
-                    base ** (torch.arange(k_max) / k_max)))
+        self.register_buffer(
+            "theta_ks",
+            (1 / (base ** (torch.arange(k_max) / k_max))).float()
+        )
 
         self.prev_positions = None
         self.cache = None
 
     def build_angles(self, B, positions: POSITIONS):
         if self.prev_positions is not None:
-            if all(torch.equal(i, j) for i, j in zip(positions, self.prev_positions)):
-                return self.cache
+            if positions.shape == self.prev_positions.shape:
+                if torch.all(positions == self.prev_positions):
+                    return self.cache
 
-        rotations = []
-        for i in positions:
-            freqs = torch.bmm(i.unsqueeze(2), self.theta_ks[None, ...].repeat(B, 1).unsqueeze(1)).float()
-            freqs_cis = torch.polar(torch.ones_like(freqs), freqs)  # complex64
-            rotations.append(freqs_cis)
+        freqs = torch.matmul(
+            positions.unsqueeze(3),
+            self.theta_ks[None, None, ...].expand(B, -1, -1).unsqueeze(2)).permute(0, 2, 1, 3).reshape(B, positions.shape[-1], -1)
+        freqs_cis = torch.polar(torch.ones_like(freqs), freqs)  # complex64
 
-        rotations = torch.cat(rotations, dim=2)
-
-        self.cache = rotations
+        self.cache = freqs_cis
         self.prev_positions = positions
-        return rotations
+        return freqs_cis
 
     def forward(self, x, positions: torch.tensor):
         if self.x_shape is None:
@@ -73,19 +73,12 @@ class RoPENd(nn.Module, BasePosEmbedding):
                 "x_shape must be set before the first forward pass")
         B, N, H, E = x.shape
 
-        # Take out the CLS token
-        cls = x[:, 0]
-
-
         rotations = self.build_angles(B, positions)
 
         # convert input into complex numbers to perform rotation
         x = torch.view_as_complex(x.reshape(*x.shape[:-1], -1, 2))
 
-        # Ignore the CLS token when applying positional information
-        # Also add a dummy dim to broadcast with all heads
-        x_ = x[:, 1:, ...] * rotations[..., None, :]
-        x[:, 1:, ...] = x_
+        x = x * rotations[..., None, :]
         x = torch.view_as_real(x).reshape(B, N, H, E)
 
         return self.dropout(x)

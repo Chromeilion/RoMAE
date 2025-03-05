@@ -127,7 +127,8 @@ class Trainer:
               test_dataset: torch.utils.data.Dataset,
               model: torch.nn.Module,
               checkpoint: Optional[str] = None,
-              collate_fn=torch.utils.data.dataloader.default_collate):
+              train_collate_fn=torch.utils.data.dataloader.default_collate,
+              eval_collate_fn=torch.utils.data.dataloader.default_collate):
         Path(self.config.checkpoint_dir).mkdir(exist_ok=True, parents=True)
         self.set_seeds()
         accelerator = Accelerator(project_dir=self.config.checkpoint_dir)
@@ -138,7 +139,7 @@ class Trainer:
             num_workers=self.config.num_dataset_workers,
             pin_memory=True,
             shuffle=True,
-            collate_fn=collate_fn,
+            collate_fn=train_collate_fn,
             prefetch_factor=2,
         )
         test_dataloader = torch.utils.data.DataLoader(
@@ -146,7 +147,7 @@ class Trainer:
             batch_size=self.config.batch_size,
             num_workers=self.config.num_dataset_workers,
             pin_memory=True,
-            collate_fn=collate_fn,
+            collate_fn=eval_collate_fn,
             prefetch_factor=2
         )
         optim = self.get_optim()(

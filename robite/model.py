@@ -13,9 +13,9 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 from robite.positional_embeddings import (
     RoPENd,
     AbsoluteSinCosine,
-    DummyPosEmbedding
+    DummyPosEmbedding,
 )
-from robite.utils import RMSNorm
+from robite.utils import RMSNorm, patchify, POSITION_DTYPE
 
 
 class RoBiTEBaseConfig(BaseSettings):
@@ -30,6 +30,7 @@ class RoBiTEBaseConfig(BaseSettings):
     max_len: int = Field(1500)
     tubelet_size: tuple[int, int, int] = Field((1, 1, 16))
     n_channels: int = Field(1)
+    head_drop_rate: float = Field(0.)
 
 
 class EncoderConfig(BaseModel):
@@ -66,7 +67,6 @@ class RoBiTEConfig(RoBiTEBaseConfig):
     )
     dim_output: Optional[int]
     encoder_config: EncoderConfig
-    head_drop_rate: float = Field(0.)
 
 
 class InterpolationConfig(RoBiTEBaseConfig):
@@ -81,7 +81,7 @@ class InterpolationConfig(RoBiTEBaseConfig):
     )
     encoder_config: EncoderConfig
     decoder_config: EncoderConfig
-    mask_ratio: float = Field(0.)
+    mask_ratio: float = Field(.5)
 
 
 def _get_inpt_pos_embedding(pos_encoding: str, d_model: int,
@@ -128,6 +128,8 @@ def _init_weights(m):
             nn.init.constant_(m.bias, 0)
     elif isinstance(m, nn.RMSNorm):
         nn.init.constant_(m.weight, 1.0)
+    elif isinstance(m, nn.Parameter): # For MASK or CLS tokens
+        torch.trunc_normal(m, std=.02)
 
 
 def load_from_checkpoint(checkpoint_dir, model_cls, model_config):
@@ -155,6 +157,7 @@ class RoBiTEBase(nn.Module):
                 config.tubelet_size[0] * config.tubelet_size[1] *
                 config.tubelet_size[2] * config.n_channels
         )
+        self.cls = nn.Parameter(torch.zeros(config.encoder_config.d_model))
         self.projection = nn.Linear(proj_input_dim, d_model)
 
         self._inpt_pos_embedding, self._attn_pos_embedding = None, None
@@ -184,58 +187,15 @@ class RoBiTEBase(nn.Module):
         )
         return inpt_pos_embedding, attn_pos_embedding
 
-    def patchify(self, x):
-        """
-        Expected input format: BTHW
-        Converts the input video-like format to a sequence of patches
-        """
-        b, t, c, h, w = x.shape
-
-        t_p = t // self.config.tubelet_size[0]
-        h_p = h // self.config.tubelet_size[1]
-        w_p = w // self.config.tubelet_size[2]
-        n = t_p * h_p * w_p
-        x = x.reshape(b, t_p, h_p, w_p, *self.config.tubelet_size, c)
-        return x.reshape(b, n, -1), torch.tensor((t_p, h_p, w_p), device=x.device)
-
-    @staticmethod
-    def prepare_positions(b, t, h, w):
-        """Take in a bunch of potentially None positions and replace None's
-        with position zero (equating to no position in rope).
-        This ensures that all position tensors have the same length
-        (corresponding to the number of tokens)
-        """
-        pos = [t, h, w]
-        if all([i is None for i in pos]):
-            raise AttributeError("All position tensors cannot be None, set at "
-                                 "least one to a valid value!")
-        n_positions = 0
-        device = None
-        for i in pos:
-            if i is not None:
-                n_positions = i.shape[1]
-                device = i.device
-                break
-        positions = []
-        for i, p in enumerate(pos):
-            if p is None:
-                positions.append(torch.zeros((b, n_positions), device=device))
-            else:
-                positions.append(p)
-        return positions
-
     def get_attn_mask(self, x_shape: tuple[int, ...], device,
-                      pad_mask: Optional[torch.Tensor] = None):
+                      pad_mask: Optional[torch.Tensor] = None) -> tuple[torch.Tensor, Optional[torch.Tensor]]:
         """Generate the attention mask based on an input pad mask. If there is
-        no pad mask, the attention mask will be all zeros
+        no pad mask, the attention mask will be all zeros.
+        Also adds an entry at the beginning for the CLS token.
         """
         if pad_mask is not None:
-            assert pad_mask.shape == x_shape[:2], (
-                f"Pad mask has the wrong shape ({pad_mask.shape}), it should "
-                f"have shape {x_shape[:2]}"
-            )
             attn_mask = torch.full(
-                (x_shape[0], x_shape[1]+1, x_shape[1]+1), float("-inf"), device=device
+                (x_shape[0], x_shape[1], x_shape[1]), float("-inf"), device=device
             )
             pad_mask = ~torch.cat((self.zeros.repeat(x_shape[0])[..., None], pad_mask), dim=1)
             # The attention mask only needs to be applied to the columns (keys)
@@ -246,7 +206,8 @@ class RoBiTEBase(nn.Module):
         return attn_mask
 
     def set_loss_fn(self, loss_fn):
-        """Manually set the model loss function"""
+        """Manually set the model loss function
+        """
         self.loss_fn = loss_fn
 
     def load_weights(self, checkpoint_dir):
@@ -273,7 +234,6 @@ class RoBiTE(RoBiTEBase):
         self.encoder: nn.Module = Encoder(
             config=config.encoder_config
         )
-        self.cls = nn.Parameter(torch.zeros(config.encoder_config.d_model))
         self.head = ClassificationHead(
             d_model=config.encoder_config.d_model,
             d_output=config.dim_output,
@@ -291,21 +251,20 @@ class RoBiTE(RoBiTEBase):
         """
         self.head = head
 
-    def forward(self, values: torch.Tensor, t=None, h=None, w=None,
+    def forward(self, values: torch.Tensor, positions: POSITION_DTYPE,
                 pad_mask=None, label=None) -> tuple[torch.Tensor, torch.Tensor]:
         b = values.shape[0]
         # Convert input to a sequence of tubelets
-        x, shape = self.patchify(values)
-        positions = self.prepare_positions(b, t, h, w)
+        x, shape = patchify(self.config.tubelet_size, values)
         # Precompute positional embedding matrices if applicable
         self.inpt_pos_embedding.set_x_shape(shape)
         self.attn_pos_embedding.set_x_shape(shape)
 
         x = self.projection(x)
-        x = self.inpt_pos_embedding(x, positions)
-        attn_mask = self.get_attn_mask(x.shape, x.device, pad_mask)
         # Add classification token to the beginning of the sequence
         x = torch.cat((self.cls.expand(b, 1, -1), x), dim=1)
+        x = self.inpt_pos_embedding(x, positions)
+        attn_mask, pad_mask = self.get_attn_mask(x.shape, x.device, pad_mask)
         # Encoder forward pass
         x = self.encoder(
             x,
@@ -321,35 +280,103 @@ class RoBiTE(RoBiTEBase):
         return logits, loss
 
 
-class SEFTForInterpolation(nn.Module):
+class RoBiTEForInterpolation(RoBiTEBase):
     def __init__(self, config: InterpolationConfig, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        if config.d_model % 2 != 0:
-            raise ValueError(f"Cannot use sin/cos positional encoding with "
-                             f"an odd dim ({config.d_model})")
+        super().__init__(config, config.encoder_config.d_model, *args, **kwargs)
         self.config: InterpolationConfig = config
-        self.pos_drop = nn.Dropout(p=config.drop_rate)
-        self.n_layers = config.depth
+        self.encoder = Encoder(config.encoder_config)
+        self.decoder = Encoder(config.decoder_config)
+        # Projection from encoder embedding dimension to decoder
+        # embedding dimension
+        self.encoder_decoder_proj = nn.Linear(config.encoder_config.d_model,
+                                              config.decoder_config.d_model)
 
-        self.layers = torch.nn.ModuleList()
-        for layer_id in range(self.n_layers):
-            self.layers.append(TransformerBlock(layer_id, config))
+        self.encoder_inpt_pos_embedding, self.encoder_attn_pos_embedding = self.get_pos_embs(
+            config, nhead=config.encoder_config.nhead, d_model=config.encoder_config.d_model
+        )
+        self.decoder_inpt_pos_embedding, self.decoder_attn_pos_embedding = self.get_pos_embs(
+            config, nhead=config.decoder_config.nhead, d_model=config.decoder_config.d_model
+        )
 
-        self.norm = RMSNorm(config.d_model, eps=config.layer_norm_eps)
+        self.loss_fn = nn.MSELoss()
+        self.mask_token = nn.Parameter(torch.zeros(1, 1, config.decoder_config.d_model))
+        self.head = InterpolationHead(
+            d_model=config.decoder_config.d_model,
+            d_output=math.prod(config.tubelet_size),
+            layer_norm_eps=config.decoder_config.layer_norm_eps,
+            head_drop_rate=config.head_drop_rate
+        )
+        self.loss_fn = nn.MSELoss()
+        _init_weights(self)
 
-        self.head_dropout = nn.Dropout(config.head_drop_rate)
-        self.cls = nn.Parameter(torch.zeros(config.d_model))
-        self.head = lambda x: x
-        if config.dim_output is not None:
-            self.head = ClassificationHead(config)
+    def forward(self, values: torch.Tensor, mask: torch.Tensor,
+                positions: POSITION_DTYPE, pad_mask=None,
+                label=None) -> tuple[torch.Tensor, torch.Tensor]:
+        b = values.shape[0]
+        # Convert input to a sequence of tubelets
+        x, shape = patchify(self.config.tubelet_size, values)
 
-        proj_input_dim = config.tubelet_size[0] * config.tubelet_size[1] * config.tubelet_size[2] * config.n_channels
-        self.projection = nn.Linear(proj_input_dim, config.d_model)
-        self.pos_embedding = self._get_pos_embedding(config)
+        # Extract all the values that are being masked out
+        m_x = x[mask[:, 1:]].reshape(b, -1, x.shape[-1])
+        m_positions = positions[mask[:, None, ].expand(-1, 3, -1)].reshape(b, 3, -1)
+        m_pad_mask = pad_mask[mask[:, 1:]].reshape(b, -1)
 
-        self.loss_fn = nn.CrossEntropyLoss()
-        self.register_buffer('zeros', torch.zeros(1, dtype=torch.bool))
-        self._init_weights(self)
+        x = self.projection(x)
+        # Add classification token to the beginning of the sequence
+        x = torch.cat((self.cls.expand(b, 1, -1), x), dim=1)
+
+        # Now get all the values that are not masked out
+        x = x[~mask].reshape(b, -1, x.shape[-1])
+        positions = positions[~mask[:, None, ...].expand(-1, 3, -1)].reshape(b, 3, -1)
+        pad_mask = pad_mask[~mask[:, 1:]].reshape(b, -1)
+
+        # Precompute positional embedding matrices if applicable
+        self.encoder_inpt_pos_embedding.set_x_shape(shape)
+        self.encoder_attn_pos_embedding.set_x_shape(shape)
+
+        x = self.encoder_inpt_pos_embedding(x, positions)
+
+        attn_mask = self.get_attn_mask(x.shape, x.device, pad_mask)
+
+        # Encoder forward pass
+        x = self.encoder(
+            x,
+            positions=positions,
+            pos_encoding=self.encoder_attn_pos_embedding,
+            attn_mask=attn_mask
+        )
+        x = self.encoder_decoder_proj(x)
+
+        mask_tokens = self.mask_token.expand(b, m_x.shape[1], -1)
+
+        # Precompute positional embeddings again for the different size
+        self.decoder_inpt_pos_embedding.set_x_shape(shape)
+        self.decoder_attn_pos_embedding.set_x_shape(shape)
+
+        # Apply input positional encodings to our MASK tokens.
+        mask_tokens = self.encoder_inpt_pos_embedding(mask_tokens, m_positions)
+
+        # Append MASK token and positional information
+        x = torch.cat([x, mask_tokens], dim=1)
+        positions = torch.cat([positions, m_positions], dim=2)
+        pad_mask = torch.cat([pad_mask, m_pad_mask], dim=1)
+
+        # Get our new attention and padding masks
+        attn_mask = self.get_attn_mask(x.shape, x.device, pad_mask)
+
+        # Decoder forward pass
+        x = self.decoder(
+            x,
+            positions=positions,
+            pos_encoding=self.decoder_attn_pos_embedding,
+            attn_mask=attn_mask
+        )
+
+        # Apply head to get logits and calculate loss
+        logits = self.head(x[:, -m_x.shape[-2]:])
+        loss = self.get_loss(logits, m_x)
+
+        return logits, loss
 
 
 class Encoder(nn.Module):
@@ -389,6 +416,25 @@ class ClassificationHead(nn.Module):
     def forward(self, x):
         # Take out the CLS token
         x = x[:, 0, :]
+        # Apply dropout
+        x = self.dropout(x)
+        return self.head(x)
+
+
+class InterpolationHead(nn.Module):
+    """Simple interpolation head making predictions on the original tubelet
+    values from the learned MASK tokens.
+    """
+    def __init__(self, d_model: int, d_output: int, layer_norm_eps: float,
+                 head_drop_rate: float, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.dropout = nn.Dropout(head_drop_rate)
+        self.head = nn.Sequential(
+            RMSNorm(d_model, layer_norm_eps),
+            nn.Linear(d_model, d_output)
+        )
+
+    def forward(self, x):
         # Apply dropout
         x = self.dropout(x)
         return self.head(x)
