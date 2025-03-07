@@ -374,7 +374,9 @@ class RoBiTEForInterpolation(RoBiTEBase):
 
         # Apply head to get logits and calculate loss
         logits = self.head(x[:, -m_x.shape[-2]:])
-        loss = self.get_loss(logits, m_x)
+        loss = None
+        if m_x.shape[1] != 0:
+            loss = self.get_loss(logits, m_x)
 
         return logits, loss
 

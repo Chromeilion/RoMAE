@@ -180,7 +180,8 @@ class Trainer:
                     optim.zero_grad()
                     # The model is expected to return its own loss
                     _, loss = model(**modelargs)
-                    accelerator.backward(loss)
+                    if loss is not None:
+                        accelerator.backward(loss)
                     if self.config.gradient_clip is not None:
                         accelerator.clip_grad_norm_(
                             model.parameters(),
@@ -226,11 +227,12 @@ class Trainer:
         norm = torch.cat(grads).norm()
         self.run.log({"train/lr": optim.param_groups[0]["lr"]}, step=step)
         self.run.log({"train/gradient_norm": norm}, step=step)
-        self.run.log({"loss/train": loss_train.item()}, step=step)
-        print(f"Train loss: {loss_train.item()}\n")
+        if loss_train is not None:
+            self.run.log({"loss/train": loss_train.item()}, step=step)
+            print(f"Train loss: {loss_train.item()}\n")
         loss = 0
         for modelargs in tqdm.tqdm(test_dataloader, desc="Evaluating"):
-            modelargs = {key: val.to(loss_train.device) for key, val in
+            modelargs = {key: val.to(model.device) for key, val in
                          modelargs.items()}
             _, loss_ = model(**modelargs)
             loss = loss + loss_ / len(test_dataloader)
