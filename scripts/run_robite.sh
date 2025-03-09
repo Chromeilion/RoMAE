@@ -1,10 +1,10 @@
 #!/bin/bash
 #SBATCH --partition=boost_usr_prod
 #SBATCH --job-name=robite-plasticc
-#SBATCH --nodes=1
+#SBATCH --nodes=2
 #SBATCH --ntasks-per-node=1
 #SBATCH --cpus-per-task=32
-#SBATCH --time=24:00:00
+#SBATCH --time=04:00:00
 #SBATCH --output=./logs/run%j.out
 #SBATCH --mem=0
 #SBATCH --gres=gpu:4
@@ -25,19 +25,33 @@ fi
 # Load .env file
 set -a; source .env; set +a
 
-
 module load cuda/12.3
 module load python/3.11.6--gcc--8.5.0
 
-
 # Load the virtual environment
 source "$VIRTUALENV_LOC"
+
+# Number of GPUS on each booster node, change depending on the actual hardware
+GPUS_PER_NODE=4
+# Splitting 32 CPU's between 4 gpus gives 8 cpus per process
+CPUS_PER_PROCESS=8
+
+# Tell the package how many CPU's each dataloader should spawn
+export ROBITE_TRAINER_NUM_DATASET_WORKERS=$CPUS_PER_PROCESS
+
+# Number of nodes and processes in the current job
+NNODES=$SLURM_NNODES
+NUM_PROCESSES=$(expr $NNODES \* $GPUS_PER_NODE)
 
 # Use the first node's hostname as the master node address
 MASTER_ADDR=$(scontrol show hostnames "$SLURM_JOB_NODELIST" | head -n 1)
 MASTER_PORT=6000
 
 echo "Master address: $MASTER_ADDR"
+echo "Master port: $MASTER_PORT"
+echo "Machine rank: $SLURM_JOBID"
+echo "Num processes: $NUM_PROCESSES"
+echo "Num machines: $NNODES"
 
 export LAUNCHER="accelerate launch \
     --main_process_ip $MASTER_ADDR \
@@ -46,10 +60,17 @@ export LAUNCHER="accelerate launch \
     --num_processes $NUM_PROCESSES \
     --num_machines $NNODES \
     --multi_gpu \
-    --dynamo_mode max-autotune \
+    --enable_cpu_affinity \
+    --num_cpu_threads_per_process $CPUS_PER_PROCESS \
+    --mixed_precision no \
+    --module \
+    --rdzv_backend c10d \
+    --dynamo_mode default \
+    --dynamo_backend inductor \
+    --dynamo_use_dynamic \
     "
 
-export PROGRAM="$ROBITE_PACKAGE_ROOT/robite $1"
+export PROGRAM="$ROBITE_PACKAGE_ROOT $1"
 export CMD="$LAUNCHER $PROGRAM"
 
 srun --jobid $SLURM_JOBID bash -c "$CMD" 2>&1 | tee -a $LOG_PATH

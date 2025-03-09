@@ -2,12 +2,12 @@ from datetime import datetime
 import os
 import random
 from pathlib import Path
+from typing import Any, Optional
+import json
+
 import numpy as np
 import torch
-import json
-from typing import Any, Optional
 import tqdm
-from robite.utils import CosineLRScheduleWithWarmup
 import torch._dynamo
 import wandb
 from pydantic import Field
@@ -15,8 +15,11 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 from accelerate import Accelerator
 from accelerate.data_loader import skip_first_batches
 
+from robite.utils import CosineLRScheduleWithWarmup
 
+# Needed if torch compile is used on unsupported hardware
 torch._dynamo.config.suppress_errors = True
+
 PathLike = str | os.PathLike
 
 noop = lambda *_, **__: None
@@ -49,8 +52,8 @@ class TrainerConfig(BaseSettings):
         "SEFT",
         description="Name of the project ind WandB"
     )
-    optimizer_args: Optional[dict[str, Any]] = Field(
-        None,
+    optimizer_args: dict[str, Any] = Field(
+        {},
         description="Arguments to be passed to the optimizer"
     )
     device: str = Field(
@@ -87,13 +90,17 @@ class Trainer:
         self.post_train_hook = noop
         self.run = None
 
-    def init_wandb(self, model):
-        conf = {"trainer": dict(self.config), "model": dict(model.config)}
-        self.run = wandb.init(
-            project=self.config.project_name,
-            name=self.config.run_name,
-            config=conf
-        )
+    def init_wandb(self, accelerator, model):
+        """Initialize Weights and Biases if currently the main process.
+        """
+        if accelerator.is_main_process:
+            conf = {"trainer": self.config.model_dump(),
+                    "model": model.config.model_dump()}
+            self.run = wandb.init(
+                project=self.config.project_name,
+                name=self.config.run_name,
+                config=conf
+            )
 
     def get_optim(self):
         match self.config.optimizer:
@@ -131,8 +138,9 @@ class Trainer:
               eval_collate_fn=torch.utils.data.dataloader.default_collate):
         Path(self.config.checkpoint_dir).mkdir(exist_ok=True, parents=True)
         self.set_seeds()
-        accelerator = Accelerator(project_dir=self.config.checkpoint_dir)
-        self.init_wandb(model)
+        accelerator = Accelerator(project_dir=self.config.checkpoint_dir,
+                                  step_scheduler_with_optimizer=False)
+        self.init_wandb(accelerator=accelerator, model=model)
         train_dataloader = torch.utils.data.DataLoader(
             train_dataset,
             batch_size=self.config.batch_size,
@@ -159,6 +167,7 @@ class Trainer:
             optim,
             len(train_dataloader) * self.config.epochs
         )
+        model_config = model.config
         model, optim, train_dataloader, scheduler = accelerator.prepare(
             model, optim, train_dataloader, scheduler,
             device_placement=[True, False, True, False]
@@ -191,7 +200,7 @@ class Trainer:
 
                     if step_counter % self.config.save_every == 0 and accelerator.is_main_process and step_counter > 0:
                         with torch.no_grad():
-                            self.save_checkpoint(accelerator, model, step_counter)
+                            self.save_checkpoint(accelerator, step_counter, model_config)
                     if step_counter % self.config.eval_every == 0 and accelerator.is_main_process and step_counter > 0:
                         with torch.no_grad():
                             model.eval()
@@ -207,7 +216,7 @@ class Trainer:
                 model.eval()
                 self.evaluate(model, loss, test_dataloader, optim,
                               step_counter)
-                self.save_checkpoint(accelerator, model, step_counter)
+                self.save_checkpoint(accelerator, step_counter, model_config)
                 self.post_train_hook(model, self.run)
                 model.train()
             self.run.finish()
@@ -239,14 +248,15 @@ class Trainer:
         self.run.log({"loss/validation": loss.item()}, step=step)
         self.evaluate_callback(model, loss_train, test_dataloader)
 
-    def save_checkpoint(self, accelerator: Accelerator, model, step_counter):
+    def save_checkpoint(self, accelerator: Accelerator, step_counter,
+                        model_config):
         savedir = Path(self.config.checkpoint_dir)/f"checkpoint-{step_counter}"
         savedir.mkdir(exist_ok=True)
 
         accelerator.save_state(str(savedir))
 
         with open(savedir/"model_config.json", "w") as f:
-            json.dump(model.config.model_dump(), f, indent=4)
+            json.dump(model_config.model_dump(), f, indent=4)
 
         with open(savedir/"trainer_config.json", "w") as f:
             json.dump(self.config.model_dump(), f, indent=4)

@@ -13,15 +13,8 @@ POSITIONS = torch.Tensor
 class BasePosEmbedding(ABC):
     """Abstract base class from which positional embeddings should inherit.
     """
-    def __init__(self):
-        self.x_shape: Optional[torch.Tensor] = None
-
-    def set_x_shape(self, shape: torch.Tensor) -> None:
-        if shape.shape != torch.Size([3]):
-            raise ValueError(
-                f"Expected shape to be [3], got {shape.shape}"
-            )
-        self.x_shape = shape
+    def reset_cache(self):
+        ...
 
 
 class DummyPosEmbedding(nn.Module, BasePosEmbedding):
@@ -52,6 +45,10 @@ class RoPENd(nn.Module, BasePosEmbedding):
         self.prev_positions = None
         self.cache = None
 
+    def reset_cache(self):
+        self.cache = None
+        self.prev_positions = None
+
     def build_angles(self, B, positions: POSITIONS):
         if self.prev_positions is not None:
             if positions.shape == self.prev_positions.shape:
@@ -68,9 +65,6 @@ class RoPENd(nn.Module, BasePosEmbedding):
         return freqs_cis
 
     def forward(self, x, positions: torch.tensor):
-        if self.x_shape is None:
-            raise ValueError(
-                "x_shape must be set before the first forward pass")
         B, N, H, E = x.shape
 
         rotations = self.build_angles(B, positions)

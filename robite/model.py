@@ -255,10 +255,7 @@ class RoBiTE(RoBiTEBase):
                 pad_mask=None, label=None) -> tuple[torch.Tensor, torch.Tensor]:
         b = values.shape[0]
         # Convert input to a sequence of tubelets
-        x, shape = patchify(self.config.tubelet_size, values)
-        # Precompute positional embedding matrices if applicable
-        self.inpt_pos_embedding.set_x_shape(shape)
-        self.attn_pos_embedding.set_x_shape(shape)
+        x = patchify(self.config.tubelet_size, values)
 
         x = self.projection(x)
         # Add classification token to the beginning of the sequence
@@ -276,6 +273,11 @@ class RoBiTE(RoBiTEBase):
         # Apply head to get logits and calculate loss
         logits = self.head(x)
         loss = self.get_loss(logits, label)
+
+        # We reset the positional embedding caches to avoid
+        # inter-loop dependencies in the Trainer.
+        self.inpt_pos_embedding.reset_cache()
+        self.attn_pos_embedding.reset_cache()
 
         return logits, loss
 
@@ -314,7 +316,7 @@ class RoBiTEForInterpolation(RoBiTEBase):
                 label=None) -> tuple[torch.Tensor, torch.Tensor]:
         b = values.shape[0]
         # Convert input to a sequence of tubelets
-        x, shape = patchify(self.config.tubelet_size, values)
+        x = patchify(self.config.tubelet_size, values)
 
         # Extract all the values that are being masked out
         m_x = x[mask[:, 1:]].reshape(b, -1, x.shape[-1])
@@ -330,10 +332,6 @@ class RoBiTEForInterpolation(RoBiTEBase):
         positions = positions[~mask[:, None, ...].expand(-1, 3, -1)].reshape(b, 3, -1)
         pad_mask = pad_mask[~mask[:, 1:]].reshape(b, -1)
 
-        # Precompute positional embedding matrices if applicable
-        self.encoder_inpt_pos_embedding.set_x_shape(shape)
-        self.encoder_attn_pos_embedding.set_x_shape(shape)
-
         x = self.encoder_inpt_pos_embedding(x, positions)
 
         attn_mask = self.get_attn_mask(x.shape, x.device, pad_mask)
@@ -348,10 +346,6 @@ class RoBiTEForInterpolation(RoBiTEBase):
         x = self.encoder_decoder_proj(x)
 
         mask_tokens = self.mask_token.expand(b, m_x.shape[1], -1)
-
-        # Precompute positional embeddings again for the different size
-        self.decoder_inpt_pos_embedding.set_x_shape(shape)
-        self.decoder_attn_pos_embedding.set_x_shape(shape)
 
         # Apply input positional encodings to our MASK tokens.
         mask_tokens = self.encoder_inpt_pos_embedding(mask_tokens, m_positions)
@@ -378,6 +372,13 @@ class RoBiTEForInterpolation(RoBiTEBase):
         if m_x.shape[1] != 0:
             loss = self.get_loss(logits, m_x)
 
+        # We reset the positional embedding caches to avoid
+        # inter-loop dependencies in the Trainer.
+        self.encoder_inpt_pos_embedding.reset_cache()
+        self.encoder_attn_pos_embedding.reset_cache()
+        self.decoder_inpt_pos_embedding.reset_cache()
+        self.decoder_attn_pos_embedding.reset_cache()
+
         return logits, loss
 
 
@@ -394,12 +395,9 @@ class Encoder(nn.Module):
         for layer_id in range(self.n_layers):
             self.layers.append(TransformerBlock(layer_id, config))
 
-        self.norm = RMSNorm(config.d_model, eps=config.layer_norm_eps)
-
     def forward(self, x, positions, pos_encoding, attn_mask=None):
         for layer in self.layers:
             x = layer(x, positions, pos_encoding, attn_mask)
-
         return x
 
 

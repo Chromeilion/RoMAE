@@ -17,7 +17,8 @@ dependencies = [
     "wandb",
     "pydantic-settings",
     "accelerate",
-    "safetensors"
+    "safetensors",
+    "pynvml"
 ]
 
 [project.urls]

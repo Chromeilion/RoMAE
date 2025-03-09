@@ -38,7 +38,7 @@ def patchify(tubelet_size: tuple[int, int, int], x):
     w_p = w // tubelet_size[2]
     n = t_p * h_p * w_p
     x = x.reshape(b, t_p, h_p, w_p, *tubelet_size, c)
-    return x.reshape(b, n, -1), torch.tensor((t_p, h_p, w_p), device=x.device)
+    return x.reshape(b, n, -1)
 
 
 class CosineLRScheduleWithWarmup(torch.optim.lr_scheduler.LRScheduler):
