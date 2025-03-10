@@ -73,7 +73,7 @@ class TrainerConfig(BaseSettings):
         description="Maximum number of checkpoints to keep saved on disk"
     )
     gradient_clip: Optional[float] = Field(
-        5.0,
+        1.0,
         description="Gradient clipping value"
     )
     random_seed: int = Field(42)
@@ -191,12 +191,13 @@ class Trainer:
                     _, loss = model(**modelargs)
                     if loss is not None:
                         accelerator.backward(loss)
-                    if self.config.gradient_clip is not None:
-                        accelerator.clip_grad_norm_(
-                            model.parameters(),
-                            self.config.gradient_clip
-                        )
-                    optim.step()
+                        if self.config.gradient_clip is not None:
+                            accelerator.clip_grad_norm_(
+                                model.parameters(),
+                                self.config.gradient_clip
+                            )
+                        optim.step()
+                        scheduler.step()
 
                     if step_counter % self.config.save_every == 0 and accelerator.is_main_process and step_counter > 0:
                         with torch.no_grad():
@@ -204,17 +205,16 @@ class Trainer:
                     if step_counter % self.config.eval_every == 0 and accelerator.is_main_process and step_counter > 0:
                         with torch.no_grad():
                             model.eval()
-                            self.evaluate(model, loss, test_dataloader, optim, step_counter)
+                            self.evaluate(accelerator, model, loss, test_dataloader, optim, step_counter)
                             model.train()
 
-                    scheduler.step()
                     step_counter += 1
                     pbar.update(1)
 
         if accelerator.is_main_process:
             with torch.no_grad():
                 model.eval()
-                self.evaluate(model, loss, test_dataloader, optim,
+                self.evaluate(accelerator, model, loss, test_dataloader, optim,
                               step_counter)
                 self.save_checkpoint(accelerator, step_counter, model_config)
                 self.post_train_hook(model, self.run)
@@ -227,7 +227,7 @@ class Trainer:
     def set_post_train_hook(self, hook):
         self.post_train_hook = hook
 
-    def evaluate(self, model, loss_train, test_dataloader, optim, step):
+    def evaluate(self, accelerator, model, loss_train, test_dataloader, optim, step):
         grads = [
             param.grad.detach().flatten()
             for param in model.parameters()
@@ -241,7 +241,7 @@ class Trainer:
             print(f"Train loss: {loss_train.item()}\n")
         loss = 0
         for modelargs in tqdm.tqdm(test_dataloader, desc="Evaluating"):
-            modelargs = {key: val.to(model.device) for key, val in
+            modelargs = {key: val.to(accelerator.device) for key, val in
                          modelargs.items()}
             _, loss_ = model(**modelargs)
             loss = loss + loss_ / len(test_dataloader)

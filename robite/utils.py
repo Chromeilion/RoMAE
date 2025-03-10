@@ -208,7 +208,7 @@ def prepare_positions(b, positions: POSITION_DTYPE):
         else:
             pos.append(p+1)
     pos = torch.stack(pos).permute(1, 0, 2)
-    pos = torch.cat([torch.zeros((b, 3, 1), device=pos.device), pos], dim=2)
+#    pos = torch.cat([torch.zeros((b, 3, 1), device=pos.device), pos], dim=2)
     return pos
 
 
@@ -235,5 +235,5 @@ def gen_mask(mask_ratio: float, pad_mask: torch.Tensor) -> torch.Tensor:
         for j in range(pad_mask.shape[1] + diff_from_max[i], pad_mask.shape[1]):
             mask[i, j] = True
 
-    mask = torch.cat([torch.zeros((pad_mask.shape[0], 1), dtype=torch.bool), mask], dim=1)
+#    mask = torch.cat([torch.zeros((pad_mask.shape[0], 1), dtype=torch.bool), mask], dim=1)
     return mask

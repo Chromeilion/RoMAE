@@ -18,21 +18,6 @@ from robite.positional_embeddings import (
 from robite.utils import RMSNorm, patchify, POSITION_DTYPE
 
 
-class RoBiTEBaseConfig(BaseSettings):
-    """
-    RoBiTE base configuration.
-    """
-    pos_encoding: Literal["ropend", "absolute"] = Field("ropend")
-    # Dropout to be applied to the positional encoding
-    pos_drop: float = Field(0.)
-    # Maximum length of an input, used when precomputing static positional
-    # encodings.
-    max_len: int = Field(1500)
-    tubelet_size: tuple[int, int, int] = Field((1, 1, 16))
-    n_channels: int = Field(1)
-    head_drop_rate: float = Field(0.)
-
-
 class EncoderConfig(BaseModel):
     """
     RoBiTE Transformer Encodre configuration values.
@@ -55,6 +40,22 @@ class EncoderConfig(BaseModel):
     multiple_of: int = Field(2)
 
 
+class RoBiTEBaseConfig(BaseSettings):
+    """
+    RoBiTE base configuration.
+    """
+    encoder_config: EncoderConfig
+    pos_encoding: Literal["ropend", "absolute"] = Field("ropend")
+    # Dropout to be applied to the positional encoding
+    pos_drop: float = Field(0.)
+    # Maximum length of an input, used when precomputing static positional
+    # encodings.
+    max_len: int = Field(1500)
+    tubelet_size: tuple[int, int, int] = Field((1, 1, 16))
+    n_channels: int = Field(1)
+    head_drop_rate: float = Field(0.)
+
+
 class RoBiTEConfig(RoBiTEBaseConfig):
     """
     Configuration for RoBiTE classifier.
@@ -66,7 +67,6 @@ class RoBiTEConfig(RoBiTEBaseConfig):
         env_nested_delimiter='__'
     )
     dim_output: Optional[int]
-    encoder_config: EncoderConfig
 
 
 class InterpolationConfig(RoBiTEBaseConfig):
@@ -79,7 +79,6 @@ class InterpolationConfig(RoBiTEBaseConfig):
         extra="ignore",
         env_nested_delimiter='__'
     )
-    encoder_config: EncoderConfig
     decoder_config: EncoderConfig
     mask_ratio: float = Field(.5)
 
@@ -123,13 +122,30 @@ def _init_weights(m):
     Initialize weights, biases and normalization weights in a RoBiTE model.
     """
     if isinstance(m, nn.Linear):
-        torch.trunc_normal_(m.weight, std=.02)
+        nn.init.trunc_normal_(m.weight, std=.02)
         if isinstance(m, nn.Linear) and m.bias is not None:
             nn.init.constant_(m.bias, 0)
-    elif isinstance(m, nn.RMSNorm):
+    elif isinstance(m, RMSNorm):
         nn.init.constant_(m.weight, 1.0)
-    elif isinstance(m, nn.Parameter): # For MASK or CLS tokens
-        torch.trunc_normal(m, std=.02)
+
+
+def _get_attn_mask(x_shape: tuple[int, ...], device,
+                  pad_mask: Optional[torch.Tensor] = None) -> torch.Tensor:
+    """Generate the attention mask based on an input pad mask. If there is
+    no pad mask, the attention mask will be all zeros.
+    Also adds an entry at the beginning for the CLS token.
+    """
+    if pad_mask is not None:
+        attn_mask = torch.full(
+            (x_shape[0], x_shape[1], x_shape[1]), float("-inf"),
+            device=device
+        )
+        # The attention mask only needs to be applied to the columns (keys)
+        attn_mask[~pad_mask] = 0
+        attn_mask = attn_mask.permute([0, 2, 1])[:, None, ...]
+    else:
+        attn_mask = torch.zeros((1, x_shape[1], x_shape[1]), device=device)
+    return attn_mask
 
 
 def load_from_checkpoint(checkpoint_dir, model_cls, model_config):
@@ -152,18 +168,25 @@ class RoBiTEBase(nn.Module):
         super().__init__(*args, **kwargs)
         self.loss_fn: Optional[Callable[[torch.Tensor, torch.Tensor], torch.Tensor]]
         self.loss_fn = None
+        # All models use the exact same encoder backend
+        self.encoder: nn.Module = Encoder(
+            config=config.encoder_config
+        )
         # Projection from tubelets to embedding dimension
         proj_input_dim = (
                 config.tubelet_size[0] * config.tubelet_size[1] *
                 config.tubelet_size[2] * config.n_channels
         )
-        self.cls = nn.Parameter(torch.zeros(config.encoder_config.d_model))
         self.projection = nn.Linear(proj_input_dim, d_model)
 
+        # Classification token
+        self.register_parameter("cls", nn.Parameter(torch.zeros(d_model)))
+        nn.init.trunc_normal_(self.cls, std=.02)
+
+        # A useful zero buffer
+        self.register_buffer("zeros", torch.zeros(1))
         self._inpt_pos_embedding, self._attn_pos_embedding = None, None
 
-        # Useful for generating the attention mask.
-        self.register_buffer('zeros', torch.zeros(1, dtype=torch.bool))
 
     @staticmethod
     def get_pos_embs(config: RoBiTEBaseConfig, nhead: int, d_model: int) -> tuple[nn.Module, nn.Module]:
@@ -187,24 +210,6 @@ class RoBiTEBase(nn.Module):
         )
         return inpt_pos_embedding, attn_pos_embedding
 
-    def get_attn_mask(self, x_shape: tuple[int, ...], device,
-                      pad_mask: Optional[torch.Tensor] = None) -> tuple[torch.Tensor, Optional[torch.Tensor]]:
-        """Generate the attention mask based on an input pad mask. If there is
-        no pad mask, the attention mask will be all zeros.
-        Also adds an entry at the beginning for the CLS token.
-        """
-        if pad_mask is not None:
-            attn_mask = torch.full(
-                (x_shape[0], x_shape[1], x_shape[1]), float("-inf"), device=device
-            )
-            pad_mask = ~torch.cat((self.zeros.repeat(x_shape[0])[..., None], pad_mask), dim=1)
-            # The attention mask only needs to be applied to the columns (keys)
-            attn_mask[pad_mask] = 0
-            attn_mask = attn_mask.permute([0, 2, 1])[:, None, ...]
-        else:
-            attn_mask = torch.zeros((1, x_shape[1], x_shape[1]), device=device)
-        return attn_mask
-
     def set_loss_fn(self, loss_fn):
         """Manually set the model loss function
         """
@@ -222,71 +227,18 @@ class RoBiTEBase(nn.Module):
             loss = self.loss_fn(logits, label)
         return loss
 
-
-class RoBiTE(RoBiTEBase):
-    """
-    Basic RoBiTE model with an MLP head on top. Useful for regression and
-    classification tasks.
-    """
-    def __init__(self, config: RoBiTEConfig, *args, **kwargs):
-        super().__init__(config=config, d_model=config.encoder_config.d_model, *args, **kwargs)
-        self.config: RoBiTEConfig = config
-        self.encoder: nn.Module = Encoder(
-            config=config.encoder_config
-        )
-        self.head = ClassificationHead(
-            d_model=config.encoder_config.d_model,
-            d_output=config.dim_output,
-            layer_norm_eps=config.encoder_config.layer_norm_eps,
-            head_drop_rate=config.head_drop_rate
-        )
-        self.inpt_pos_embedding, self.attn_pos_embedding = self.get_pos_embs(
-            config, nhead=config.encoder_config.nhead, d_model=config.encoder_config.d_model
-        )
-        _init_weights(self)
-
-    def set_head(self, head):
-        """Change the model head to whatever you want! Should accept the
-        encoder output logits and return something that the loss can accept.
-        """
-        self.head = head
-
-    def forward(self, values: torch.Tensor, positions: POSITION_DTYPE,
-                pad_mask=None, label=None) -> tuple[torch.Tensor, torch.Tensor]:
-        b = values.shape[0]
-        # Convert input to a sequence of tubelets
-        x = patchify(self.config.tubelet_size, values)
-
-        x = self.projection(x)
-        # Add classification token to the beginning of the sequence
-        x = torch.cat((self.cls.expand(b, 1, -1), x), dim=1)
-        x = self.inpt_pos_embedding(x, positions)
-        attn_mask, pad_mask = self.get_attn_mask(x.shape, x.device, pad_mask)
-        # Encoder forward pass
-        x = self.encoder(
-            x,
-            positions=positions,
-            pos_encoding=self.attn_pos_embedding,
-            attn_mask=attn_mask
-        )
-
-        # Apply head to get logits and calculate loss
-        logits = self.head(x)
-        loss = self.get_loss(logits, label)
-
-        # We reset the positional embedding caches to avoid
-        # inter-loop dependencies in the Trainer.
-        self.inpt_pos_embedding.reset_cache()
-        self.attn_pos_embedding.reset_cache()
-
-        return logits, loss
+    def add_cls(self, x, positions, pad_mask):
+        # Add classification token to the beginning of all relevant tensors
+        x = torch.cat((self.cls.expand(x.shape[0], 1, -1), x), dim=1)
+        positions = torch.cat([self.zeros.expand(x.shape[0], positions.shape[1], -1), positions], dim=2)
+        pad_mask = torch.cat([(self.zeros > .5).expand(x.shape[0], -1), pad_mask], dim=1)
+        return x, positions, pad_mask
 
 
 class RoBiTEForInterpolation(RoBiTEBase):
     def __init__(self, config: InterpolationConfig, *args, **kwargs):
         super().__init__(config, config.encoder_config.d_model, *args, **kwargs)
         self.config: InterpolationConfig = config
-        self.encoder = Encoder(config.encoder_config)
         self.decoder = Encoder(config.decoder_config)
         # Projection from encoder embedding dimension to decoder
         # embedding dimension
@@ -309,7 +261,6 @@ class RoBiTEForInterpolation(RoBiTEBase):
             head_drop_rate=config.head_drop_rate
         )
         self.loss_fn = nn.MSELoss()
-        _init_weights(self)
 
     def forward(self, values: torch.Tensor, mask: torch.Tensor,
                 positions: POSITION_DTYPE, pad_mask=None,
@@ -319,22 +270,25 @@ class RoBiTEForInterpolation(RoBiTEBase):
         x = patchify(self.config.tubelet_size, values)
 
         # Extract all the values that are being masked out
-        m_x = x[mask[:, 1:]].reshape(b, -1, x.shape[-1])
+        # There is a little bit of index juggling because of the extra CLS
+        # token which isn't in x yet
+        m_x = x[mask].reshape(b, -1, x.shape[-1])
         m_positions = positions[mask[:, None, ].expand(-1, 3, -1)].reshape(b, 3, -1)
-        m_pad_mask = pad_mask[mask[:, 1:]].reshape(b, -1)
-
-        x = self.projection(x)
-        # Add classification token to the beginning of the sequence
-        x = torch.cat((self.cls.expand(b, 1, -1), x), dim=1)
+        m_pad_mask = pad_mask[mask].reshape(b, -1)
 
         # Now get all the values that are not masked out
         x = x[~mask].reshape(b, -1, x.shape[-1])
         positions = positions[~mask[:, None, ...].expand(-1, 3, -1)].reshape(b, 3, -1)
-        pad_mask = pad_mask[~mask[:, 1:]].reshape(b, -1)
+        pad_mask = pad_mask[~mask].reshape(b, -1)
+
+        # Project all unmasked tubelets into embeddings
+        x = self.projection(x)
+        # Add classification token to the beginning of all relevant tensors
+        x, positions, pad_mask = self.add_cls(x, positions, pad_mask)
 
         x = self.encoder_inpt_pos_embedding(x, positions)
 
-        attn_mask = self.get_attn_mask(x.shape, x.device, pad_mask)
+        attn_mask = _get_attn_mask(x.shape, x.device, pad_mask)
 
         # Encoder forward pass
         x = self.encoder(
@@ -343,6 +297,7 @@ class RoBiTEForInterpolation(RoBiTEBase):
             pos_encoding=self.encoder_attn_pos_embedding,
             attn_mask=attn_mask
         )
+        # Project tokens from the encoder dimension to decoder dimension
         x = self.encoder_decoder_proj(x)
 
         mask_tokens = self.mask_token.expand(b, m_x.shape[1], -1)
@@ -356,7 +311,7 @@ class RoBiTEForInterpolation(RoBiTEBase):
         pad_mask = torch.cat([pad_mask, m_pad_mask], dim=1)
 
         # Get our new attention and padding masks
-        attn_mask = self.get_attn_mask(x.shape, x.device, pad_mask)
+        attn_mask = _get_attn_mask(x.shape, x.device, pad_mask)
 
         # Decoder forward pass
         x = self.decoder(
@@ -378,6 +333,86 @@ class RoBiTEForInterpolation(RoBiTEBase):
         self.encoder_attn_pos_embedding.reset_cache()
         self.decoder_inpt_pos_embedding.reset_cache()
         self.decoder_attn_pos_embedding.reset_cache()
+
+        return logits, loss
+
+
+class RoBiTE(RoBiTEBase):
+    """
+    Basic RoBiTE model with an MLP head on top. Useful for regression and
+    classification tasks.
+    """
+    def __init__(self, config: RoBiTEConfig, *args, **kwargs):
+        super().__init__(config=config, d_model=config.encoder_config.d_model, *args, **kwargs)
+        self.config: RoBiTEConfig = config
+        self.head = ClassificationHead(
+            d_model=config.encoder_config.d_model,
+            d_output=config.dim_output,
+            layer_norm_eps=config.encoder_config.layer_norm_eps,
+            head_drop_rate=config.head_drop_rate
+        )
+        self.inpt_pos_embedding, self.attn_pos_embedding = self.get_pos_embs(
+            config, nhead=config.encoder_config.nhead, d_model=config.encoder_config.d_model
+        )
+        self.apply(_init_weights)
+
+    @staticmethod
+    def from_pretrained(checkpoint: str, **kwargs):
+        p_model = load_from_checkpoint(
+            checkpoint, RoBiTEForInterpolation, InterpolationConfig
+        )
+        encoder_config = p_model.config.encoder_config
+        finetune_config = RoBiTEConfig(
+            encoder_config=encoder_config,
+            pos_encoding=p_model.config.pos_encoding,
+            tubelet_size=p_model.config.tubelet_size,
+            n_channels=p_model.config.n_channels,
+            max_len=p_model.config.max_len,
+            **kwargs
+        )
+        model = RoBiTE(config=finetune_config)
+        # Copy over all the encoder weights
+        with torch.no_grad():
+            p_model_state = p_model.state_dict()
+            encoder_keys = {
+                ".".join(key.split(".")[1:]): val for key, val in
+                p_model_state.items() if key.split(".")[0] == "encoder"
+            }
+            model.encoder.load_state_dict(encoder_keys)
+            model.cls.copy_(p_model.cls)
+        return model
+
+    def set_head(self, head):
+        """Change the model head to whatever you want! Should accept the
+        encoder output logits and return something that the loss can accept.
+        """
+        self.head = head
+
+    def forward(self, values: torch.Tensor, positions: torch.Tensor,
+                pad_mask=None, label=None) -> tuple[torch.Tensor, torch.Tensor]:
+        # Convert input to a sequence of tubelets
+        x = patchify(self.config.tubelet_size, values)
+
+        x = self.projection(x)
+        x, positions, pad_mask = self.add_cls(x, positions, pad_mask)
+        attn_mask = _get_attn_mask(x.shape, x.device, pad_mask)
+        x = self.inpt_pos_embedding(x, positions)
+        # Encoder forward pass
+        x = self.encoder(
+            x,
+            positions=positions,
+            pos_encoding=self.attn_pos_embedding,
+            attn_mask=attn_mask
+        )
+
+        # Apply head to get logits and calculate loss
+        logits = self.head(x)
+        loss = self.get_loss(logits, label)
+
+        # We reset the positional embedding caches to avoid
+        # inter-loop dependencies in the Trainer.
+        self.inpt_pos_embedding.reset_cache()
+        self.attn_pos_embedding.reset_cache()
 
         return logits, loss
 
@@ -407,8 +442,8 @@ class ClassificationHead(nn.Module):
     def __init__(self, d_model: int, d_output: int, layer_norm_eps: float,
                  head_drop_rate: float, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        self.dropout = nn.Dropout(head_drop_rate)
         self.head = nn.Sequential(
+            nn.Dropout(head_drop_rate),
             RMSNorm(d_model, layer_norm_eps),
             nn.Linear(d_model, d_output)
         )
@@ -416,8 +451,6 @@ class ClassificationHead(nn.Module):
     def forward(self, x):
         # Take out the CLS token
         x = x[:, 0, :]
-        # Apply dropout
-        x = self.dropout(x)
         return self.head(x)
 
 
