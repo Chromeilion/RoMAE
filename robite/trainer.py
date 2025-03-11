@@ -1,4 +1,5 @@
 from datetime import datetime
+import math
 import os
 import random
 from pathlib import Path
@@ -77,6 +78,11 @@ class TrainerConfig(BaseSettings):
         description="Gradient clipping value"
     )
     random_seed: int = Field(42)
+    lr_scaling: bool = Field(
+        False,
+        description="Whether to scale the learning rate with the number of "
+                    "processes. Results in a new value of lr*sqrt(np)"
+    )
 
 
 class Trainer:
@@ -114,10 +120,14 @@ class Trainer:
                 )
         return optim_fn
 
-    def get_lr_scheduler(self, optimizer, total_steps):
+    def get_lr(self, accelerator):
+        if self.config.lr_scaling:
+            return self.config.base_lr * math.sqrt(accelerator.num_processes)
+
+    def get_lr_scheduler(self, optimizer, warmup_steps, total_steps):
         if self.config.lr_schedule == "cosine":
             return CosineLRScheduleWithWarmup(
-                optimizer, self.config.warmup_steps, total_steps
+                optimizer, warmup_steps, total_steps
             )
 
     def get_optimizer_args(self):
@@ -138,8 +148,7 @@ class Trainer:
               eval_collate_fn=torch.utils.data.dataloader.default_collate):
         Path(self.config.checkpoint_dir).mkdir(exist_ok=True, parents=True)
         self.set_seeds()
-        accelerator = Accelerator(project_dir=self.config.checkpoint_dir,
-                                  step_scheduler_with_optimizer=False)
+        accelerator = Accelerator(project_dir=self.config.checkpoint_dir)
         self.init_wandb(accelerator=accelerator, model=model)
         train_dataloader = torch.utils.data.DataLoader(
             train_dataset,
@@ -165,7 +174,8 @@ class Trainer:
         )
         scheduler = self.get_lr_scheduler(
             optim,
-            len(train_dataloader) * self.config.epochs
+            self.config.warmup_steps * accelerator.num_processes,
+            len(train_dataloader) * self.config.epochs * accelerator.num_processes
         )
         model_config = model.config
         model, optim, train_dataloader, scheduler = accelerator.prepare(
