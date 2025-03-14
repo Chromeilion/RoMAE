@@ -1,6 +1,6 @@
 #!/bin/bash
 #SBATCH --partition=boost_usr_prod
-#SBATCH --job-name=robite-plasticc
+#SBATCH --job-name=roma-train
 #SBATCH --nodes=2
 #SBATCH --ntasks-per-node=1
 #SBATCH --cpus-per-task=32
@@ -11,11 +11,11 @@
 #SBATCH --exclusive
 
 # --------------------------------------------------------------------
-# A script for running RoBiTE pretraining on the Leonardo compute cluster.
+# A script for running RoMA pretraining on the Leonardo compute cluster.
 #
 # Environment variables that should be set:
 # VIRTUALENV_LOC : The location of the virtual environment with all dependencies
-# ROBITE_PACKAGE_ROOT : Location of the RoBiTE package
+# MODULE_NAME : Name of the python package being run
 # --------------------------------------------------------------------
 
 if [ $# -ne 1 ]; then
@@ -29,6 +29,7 @@ module load cuda/12.3
 module load python/3.11.6--gcc--8.5.0
 
 # Load the virtual environment
+# shellcheck source=.env
 source "$VIRTUALENV_LOC"
 
 # Number of GPUS on each booster node, change depending on the actual hardware
@@ -36,12 +37,12 @@ GPUS_PER_NODE=4
 # Splitting 32 CPU's between 4 gpus gives 8 cpus per process
 CPUS_PER_PROCESS=8
 
-# Tell the package how many CPU's each dataloader should spawn
-export ROBITE_TRAINER_NUM_DATASET_WORKERS=$CPUS_PER_PROCESS
-
 # Number of nodes and processes in the current job
 NNODES=$SLURM_NNODES
 NUM_PROCESSES=$(expr $NNODES \* $GPUS_PER_NODE)
+
+# Tell the RoMA how many CPU's each dataloader should spawn
+export ROMA_TRAINER_NUM_DATASET_WORKERS=$CPUS_PER_PROCESS
 
 # Use the first node's hostname as the master node address
 MASTER_ADDR=$(scontrol show hostnames "$SLURM_JOB_NODELIST" | head -n 1)
@@ -70,7 +71,7 @@ export LAUNCHER="accelerate launch \
     --dynamo_use_dynamic \
     "
 
-export PROGRAM="$ROBITE_PACKAGE_ROOT $1"
+export PROGRAM="$MODULE_NAME $1"
 export CMD="$LAUNCHER $PROGRAM"
 
 srun --jobid $SLURM_JOBID bash -c "$CMD" 2>&1 | tee -a $LOG_PATH
