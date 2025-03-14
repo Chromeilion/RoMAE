@@ -15,7 +15,7 @@
 #
 # Environment variables that must be set:
 # VIRTUALENV_LOC : The location of the virtual environment with all dependencies
-# EXPERIMENT_PACKAGE : Name of the experimnet python package being run
+# EXPERIMENT_PACKAGE : Name of the experiment python package being run
 # --------------------------------------------------------------------
 
 if [ $# -ne 1 ]; then
