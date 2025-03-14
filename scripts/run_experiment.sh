@@ -15,15 +15,19 @@
 #
 # Environment variables that must be set:
 # VIRTUALENV_LOC : The location of the virtual environment with all dependencies
-# EXPERIMENT_PACKAGE : Name of the experiment python package being run
+# EXPERIMENT_NAME : Name of the experiment python package being run
 # --------------------------------------------------------------------
-
-if [ $# -ne 1 ]; then
-  echo "Please specify the RoBiTE subcommand to run as an argument"
-fi
-
 # Load .env file
 set -a; source .env; set +a
+
+if [[ -z "${VIRTUALENV_LOC}" ]]; then
+  echo "Please set the VIRTUALENV_LOC environment variable in the .env file"
+  exit
+fi
+if [[ -z "${EXPERIMENT_NAME}" ]]; then
+  echo "Please set the EXPERIMENT_NAME environment variable in the .env file"
+  exit
+fi
 
 module load cuda/12.3
 module load python/3.11.6--gcc--8.5.0
@@ -71,10 +75,9 @@ export LAUNCHER="accelerate launch \
     --dynamo_use_dynamic \
     "
 
-export PROGRAM="$EXPERIMENT_PACKAGE $1"
-export CMD="$LAUNCHER $PROGRAM"
+export CMD="$LAUNCHER $EXPERIMENT_NAME"
 
-srun --jobid $SLURM_JOBID bash -c "$CMD" 2>&1 | tee -a $LOG_PATH
+srun --jobid $SLURM_JOBID bash -c "$CMD$(printf "${1+ %q}" "$@")" 2>&1 | tee -a $LOG_PATH
 
 # Exit the virtualenv for posterity
 deactivate
