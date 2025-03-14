@@ -11,11 +11,11 @@
 #SBATCH --exclusive
 
 # --------------------------------------------------------------------
-# A script for running RoMA pretraining on the Leonardo compute cluster.
+# A script for running RoMA experiments on the Leonardo compute cluster.
 #
-# Environment variables that should be set:
+# Environment variables that must be set:
 # VIRTUALENV_LOC : The location of the virtual environment with all dependencies
-# MODULE_NAME : Name of the python package being run
+# EXPERIMENT_PACKAGE : Name of the experimnet python package being run
 # --------------------------------------------------------------------
 
 if [ $# -ne 1 ]; then
@@ -71,7 +71,7 @@ export LAUNCHER="accelerate launch \
     --dynamo_use_dynamic \
     "
 
-export PROGRAM="$MODULE_NAME $1"
+export PROGRAM="$EXPERIMENT_PACKAGE $1"
 export CMD="$LAUNCHER $PROGRAM"
 
 srun --jobid $SLURM_JOBID bash -c "$CMD" 2>&1 | tee -a $LOG_PATH
