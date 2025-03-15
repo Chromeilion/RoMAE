@@ -36,6 +36,9 @@ module load python/3.11.6--gcc--8.5.0
 # shellcheck source=.env
 source "$VIRTUALENV_LOC"
 
+# All command line arguments passed to the script
+ARGS="$@"
+
 # Number of GPUS on each booster node, change depending on the actual hardware
 GPUS_PER_NODE=4
 # Splitting 32 CPU's between 4 gpus gives 8 cpus per process
@@ -75,9 +78,11 @@ export LAUNCHER="accelerate launch \
     --dynamo_use_dynamic \
     "
 
-export CMD="$LAUNCHER $EXPERIMENT_NAME"
+export CMD="$LAUNCHER $EXPERIMENT_NAME $ARGS"
 
-srun --jobid $SLURM_JOBID bash -c "$CMD$(printf "${1+ %q}" "$@")" 2>&1 | tee -a $LOG_PATH
+echo "Running command: $CMD"
+
+srun --jobid $SLURM_JOBID bash -c "$CMD" 2>&1 | tee -a $LOG_PATH
 
 # Exit the virtualenv for posterity
 deactivate
