@@ -1,10 +1,10 @@
-from datetime import datetime
 import math
 import os
 import random
+import json
 from pathlib import Path
 from typing import Any, Optional
-import json
+from datetime import datetime
 
 import numpy as np
 import torch
@@ -16,13 +16,14 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 from accelerate import Accelerator
 from accelerate.data_loader import skip_first_batches
 
-from robite.utils import CosineLRScheduleWithWarmup
+from roma.utils import CosineLRScheduleWithWarmup
 
-# Needed if torch compile is used on unsupported hardware
+# Supress errors if torch compile is used on unsupported hardware
 torch._dynamo.config.suppress_errors = True
 
 PathLike = str | os.PathLike
 
+# A useful no-op function
 noop = lambda *_, **__: None
 
 class TrainerConfig(BaseSettings):
@@ -43,23 +44,24 @@ class TrainerConfig(BaseSettings):
     )
     num_dataset_workers: int = Field(
         os.cpu_count() - 1,
-        description="Number of dataloader workers"
+        description="Number of dataloader workers to spawn"
     )
     run_name: str = Field(
         datetime.today().strftime('%Y-%m-%d-%H-%M-%S'),
-        description="Name of the run"
+        description="Name of the run. Defaults to the date"
     )
     project_name: str = Field(
-        "SEFT",
-        description="Name of the project ind WandB"
+        "RoMA",
+        description="Name of the project in WandB"
+    )
+    entity_name: str = Field(
+        "rmae",
+        description="Name of the entity in WandB, should be the same as "
+                    "the team you are on."
     )
     optimizer_args: dict[str, Any] = Field(
         {},
-        description="Arguments to be passed to the optimizer"
-    )
-    device: str = Field(
-        "cuda" if torch.cuda.is_available() else "cpu",
-        description="Device to use when training"
+        description="Additional arguments to be passed to the optimizer"
     )
     warmup_steps: int = Field(
         2000,
@@ -67,28 +69,31 @@ class TrainerConfig(BaseSettings):
     )
     lr_schedule: str = Field(
         "cosine",
-        description="What learning rate scheduler to use"
+        description="What learning rate scheduler to use, currently only "
+                    "supports cosine."
     )
     max_checkpoints: Optional[int] = Field(
         4,
-        description="Maximum number of checkpoints to keep saved on disk"
+        description="Maximum number of checkpoints to keep saved on disk "
+                    "at one time"
     )
     gradient_clip: Optional[float] = Field(
         1.0,
-        description="Gradient clipping value"
+        description="Gradient norm clipping value. Defaults to 1."
     )
     random_seed: int = Field(42)
     lr_scaling: bool = Field(
         False,
         description="Whether to scale the learning rate with the number of "
-                    "processes. Results in a new value of lr*sqrt(np)"
+                    "processes. When enabled, the learning rate will be scaled "
+                    "to a new value using base_lr*sqrt(np), where np is the "
+                    "number of processes being used for training."
     )
 
 
 class Trainer:
     """
-    Trainer class. Not as flexible as the Huggingface one, but gets the job
-    done.
+    Trainer class. Similar to the Huggingface Trainer but simpler.
     """
     def __init__(self, config: TrainerConfig):
         self.config: TrainerConfig = config
@@ -103,6 +108,7 @@ class Trainer:
             conf = {"trainer": self.config.model_dump(),
                     "model": model.config.model_dump()}
             self.run = wandb.init(
+                entity=self.config.entity_name,
                 project=self.config.project_name,
                 name=self.config.run_name,
                 config=conf
@@ -123,6 +129,7 @@ class Trainer:
     def get_lr(self, accelerator):
         if self.config.lr_scaling:
             return self.config.base_lr * math.sqrt(accelerator.num_processes)
+        return self.config.base_lr
 
     def get_lr_scheduler(self, optimizer, warmup_steps, total_steps):
         if self.config.lr_schedule == "cosine":
@@ -130,26 +137,13 @@ class Trainer:
                 optimizer, warmup_steps, total_steps
             )
 
-    def get_optimizer_args(self):
-        if self.config.optimizer_args is not None:
-            return self.config.optimizer_args
-        return {}
-
     def set_seeds(self):
         torch.manual_seed(self.config.random_seed)
         random.seed(self.config.random_seed)
         np.random.seed(self.config.random_seed)
 
-    def train(self, train_dataset: torch.utils.data.Dataset,
-              test_dataset: torch.utils.data.Dataset,
-              model: torch.nn.Module,
-              checkpoint: Optional[str] = None,
-              train_collate_fn=torch.utils.data.dataloader.default_collate,
-              eval_collate_fn=torch.utils.data.dataloader.default_collate):
-        Path(self.config.checkpoint_dir).mkdir(exist_ok=True, parents=True)
-        self.set_seeds()
-        accelerator = Accelerator(project_dir=self.config.checkpoint_dir)
-        self.init_wandb(accelerator=accelerator, model=model)
+    def get_dataloaders(self, train_dataset, test_dataset,
+                            train_collate_fn, eval_collate_fn):
         train_dataloader = torch.utils.data.DataLoader(
             train_dataset,
             batch_size=self.config.batch_size,
@@ -167,17 +161,39 @@ class Trainer:
             collate_fn=eval_collate_fn,
             prefetch_factor=2
         )
+        return train_dataloader, test_dataloader
+
+    def train(self, train_dataset: torch.utils.data.Dataset,
+              test_dataset: torch.utils.data.Dataset,
+              model: torch.nn.Module,
+              checkpoint: Optional[str] = None,
+              train_collate_fn=torch.utils.data.dataloader.default_collate,
+              eval_collate_fn=torch.utils.data.dataloader.default_collate):
+        # Create the checkpoint directory if it doesn't exist
+        Path(self.config.checkpoint_dir).mkdir(exist_ok=True, parents=True)
+        self.set_seeds()
+        accelerator = Accelerator(
+            project_dir=self.config.checkpoint_dir,
+            step_scheduler_with_optimizer=False
+        )
+        self.init_wandb(accelerator=accelerator, model=model)
+        train_dataloader, test_dataloader = self.get_dataloaders(
+            train_dataset=train_dataset,
+            test_dataset=test_dataset,
+            train_collate_fn=train_collate_fn,
+            eval_collate_fn=eval_collate_fn
+        )
         optim = self.get_optim()(
             model.parameters(),
-            lr=self.config.base_lr,
-            **self.get_optimizer_args()
+            lr=self.get_lr(accelerator),
+            **self.config.optimizer_args
         )
         scheduler = self.get_lr_scheduler(
-            optim,
-            self.config.warmup_steps * accelerator.num_processes,
-            len(train_dataloader) * self.config.epochs * accelerator.num_processes
+            optimizer=optim,
+            warmup_steps=self.config.warmup_steps,
+            total_steps=len(train_dataloader) * self.config.epochs
         )
-        model_config = model.config
+        model_config = model.config # Used when saving the model
         model, optim, train_dataloader, scheduler = accelerator.prepare(
             model, optim, train_dataloader, scheduler,
             device_placement=[True, False, True, False]
@@ -190,7 +206,6 @@ class Trainer:
                 checkpoint, accelerator, train_dataloader
             )
         model.train()
-        model.to(accelerator.device)
 
         with tqdm.tqdm(total=len(train_dataloader)*self.config.epochs,
                        desc="Training", initial=step_counter) as pbar:
@@ -201,7 +216,7 @@ class Trainer:
                     _, loss = model(**modelargs)
                     if loss is not None:
                         accelerator.backward(loss)
-                        if self.config.gradient_clip is not None:
+                        if self.config.gradient_clip is not None and accelerator.sync_gradients:
                             accelerator.clip_grad_norm_(
                                 model.parameters(),
                                 self.config.gradient_clip
@@ -230,12 +245,23 @@ class Trainer:
                 self.post_train_hook(model, self.run)
                 model.train()
             self.run.finish()
-
-    def post_train(self, *args, **kwargs):
-        self.post_train_hook(*args, **kwargs)
+        accelerator.end_training()
 
     def set_post_train_hook(self, hook):
+        """
+        Set a function te be run at the end of training. The function
+        should accept the model as the first argument and the wandb run
+        as the second.
+        """
         self.post_train_hook = hook
+
+    def set_evaluate_callback(self, callback):
+        """
+        Set a function to be run right after model evaluation.
+        Should accept the model, the training loss, and the test
+        dataloader.
+        """
+        self.evaluate_callback = callback
 
     def evaluate(self, accelerator, model, loss_train, test_dataloader, optim, step):
         grads = [
@@ -300,6 +326,3 @@ class Trainer:
         dl = skip_first_batches(dataloader, step_in_epoch)
 
         return step, current_epoch, dl
-
-    def set_evaluate_callback(self, callback):
-        self.evaluate_callback = callback

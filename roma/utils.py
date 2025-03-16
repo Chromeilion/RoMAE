@@ -1,35 +1,20 @@
 from typing import Optional
 import random
+import json
+from pathlib import Path
 
-from pydantic_core import PydanticUndefined
 import torch
 import torch.nn as nn
 import math
 
 POSITION_DTYPE = tuple[Optional[torch.Tensor], Optional[torch.Tensor], Optional[torch.Tensor]]
 
-def add_model(parser, model):
-    """Add Pydantic model to an ArgumentParser
-    Thanks miksus:
-    https://stackoverflow.com/questions/72741663/argument-parser-from-a-pydantic-model
-    """
-    fields = model.__fields__
-    for name, field in fields.items():
-        parser.add_argument(
-            f"--{name}",
-            dest=name,
-            type=field.annotation,
-            default=PydanticUndefined,
-            help=field.description,
-        )
-
 
 def patchify(tubelet_size: tuple[int, int, int], x):
     """
     Expected input format: BTCHW
     E.g. a regular video could be (1, 32, 3, 244, 244).
-    Converts the input into a sequence of tubelets, and returns the number of
-    tubelets per dimension.
+    Converts the input into a sequence of tubelets.
     """
     b, t, c, h, w = x.shape
 
@@ -42,6 +27,9 @@ def patchify(tubelet_size: tuple[int, int, int], x):
 
 
 class CosineLRScheduleWithWarmup(torch.optim.lr_scheduler.LRScheduler):
+    """
+    Cosine learning rate schedule with a linear warmup.
+    """
     def __init__(self, optimizer, warmup_steps, total_steps):
         if warmup_steps > total_steps:
             raise ValueError("Warmup steps must be less than total steps")
@@ -184,7 +172,8 @@ class RMSNorm(torch.nn.Module):
 
 
 def prepare_positions(b, positions: POSITION_DTYPE):
-    """Take in a bunch of potentially None positions and replace None's
+    """
+    Take in a bunch of potentially None positions and replace None's
     with position zero (equating to no position in RoPE).
     This ensures that all position tensors have the same length
     (corresponding to the number of tokens).
@@ -208,18 +197,62 @@ def prepare_positions(b, positions: POSITION_DTYPE):
         else:
             pos.append(p+1)
     pos = torch.stack(pos).permute(1, 0, 2)
-#    pos = torch.cat([torch.zeros((b, 3, 1), device=pos.device), pos], dim=2)
     return pos
+
+
+def load_from_checkpoint(checkpoint_dir, model_cls, model_config):
+    """
+    Load a model from a checkpoint.
+
+    Parameters
+    ----------
+    checkpoint_dir : str
+    model_cls
+        The actual uninitialized class of the model being loaded
+    model_config
+        Uninitialized configuration class of the model being loaded
+
+    Returns
+    -------
+    model
+        The provided model_cls loaded with the weights and
+        configuration present in the checkpoint directory.
+    """
+    checkpoint_dir = Path(checkpoint_dir)
+    # Load model configuration
+    with open(checkpoint_dir/"model_config.json", "r") as f:
+        config_json = json.load(f)
+    config = model_config(**config_json)
+
+    # Initialize the model class using the loaded configuration
+    model = model_cls(config)
+    # Load the model weights from the checkpoint
+    model.load_weights(checkpoint_dir)
+    return model
 
 
 def gen_mask(mask_ratio: float, pad_mask: torch.Tensor) -> torch.Tensor:
     """
-    Generate a mask for use with the interpolation model.
-    True values are masked.
+    Generate a mask for use when pre-training. True represents values
+    that are masked. Currently, this function is not very well optimized.
+    However, because this function is expected to be called during data
+    loading, it should be running in a non-blocking and multi-threaded
+    setup on the cpu. Therefore, it should have no impact on the runtime
+    unless the forward pass of on the GPU is very fast or the CPU is very
+    slow.
+
+    Parameters
+    ----------
+    mask_ratio : float
+        Percentage of tokens to mask out
+    pad_mask : torch.Tensor
+        A boolean mask where positions in the input corresponding to
+        padding have value True
     """
     if mask_ratio < 0 or mask_ratio > 1:
         raise ValueError(f"Mask ratio must be between 0 and 1, but was given "
                          f"{mask_ratio}")
+
     ratio = mask_ratio
     per_sample_n = (~pad_mask).sum(dim=1)
     n_masked_per_sample = (per_sample_n * ratio).ceil().int()
@@ -235,5 +268,4 @@ def gen_mask(mask_ratio: float, pad_mask: torch.Tensor) -> torch.Tensor:
         for j in range(pad_mask.shape[1] + diff_from_max[i], pad_mask.shape[1]):
             mask[i, j] = True
 
-#    mask = torch.cat([torch.zeros((pad_mask.shape[0], 1), dtype=torch.bool), mask], dim=1)
     return mask

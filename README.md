@@ -1,4 +1,4 @@
-# Rotary Bidirectional Transformer Encoder
+# Rotary Masked Autoencoder
 
-Implementation of the RoBiTE model, usable for various sparse multi-dimensional 
-datasets. 
+Implementation of the RoMA model.
+

@@ -3,9 +3,9 @@ requires = ["setuptools", "setuptools-scm"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "RoBiTE"
-version = "0.0.2-alpha"
-description = "Rotary Bidirectional Transformer Encoder. For use with multi-dimensional sparse data."
+name = "RoMA"
+version = "0.1.0-alpha"
+description = "Rotary Masked Autoencoder. For use with multi-dimensional sparse data and irregular timeseries."
 readme = "README.md"
 requires-python = ">=3.11"
 authors = [
@@ -22,7 +22,7 @@ dependencies = [
 ]
 
 [project.urls]
-Repository = "https://github.com/Chromeilion/SEFT"
+Repository = "https://github.com/Chromeilion/RoMA"
 
 [tool.setuptools.packages.find]
-include = ["robite"]
+include = ["roma"]

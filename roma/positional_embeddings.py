@@ -26,7 +26,7 @@ class DummyPosEmbedding(nn.Module, BasePosEmbedding):
 
 
 class RoPENd(nn.Module, BasePosEmbedding):
-    """N-dimensional Rotary Positional Embedding.
+    """N-dimensional Continuous Rotary Positional Embedding.
     """
     def __init__(self, n_dims, d_model, base=10000, dropout=0.):
         super(RoPENd, self).__init__()
@@ -58,6 +58,7 @@ class RoPENd(nn.Module, BasePosEmbedding):
         freqs = torch.matmul(
             positions.unsqueeze(3),
             self.theta_ks[None, None, ...].expand(B, -1, -1).unsqueeze(2)).permute(0, 2, 1, 3).reshape(B, positions.shape[-1], -1)
+
         freqs_cis = torch.polar(torch.ones_like(freqs), freqs)  # complex64
 
         self.cache = freqs_cis
