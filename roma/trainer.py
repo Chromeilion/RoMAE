@@ -28,7 +28,7 @@ noop = lambda *_, **__: None
 
 class TrainerConfig(BaseSettings):
     model_config = SettingsConfigDict(
-        env_prefix='ROBITE_TRAINER_',
+        env_prefix='ROMA_TRAINER_',
         env_file='.env',
         extra="ignore"
     )

@@ -14,8 +14,19 @@ from roma.positional_embeddings import (
     AbsoluteSinCosine,
     DummyPosEmbedding,
 )
-from roma.utils import RMSNorm, patchify, load_from_checkpoint
+from roma.utils import get_drop_path, patchify, load_from_checkpoint
 
+"""
+RoMA architecture implementation.
+The Transformer implementation is a modified version of the one provided by 
+Llama:
+https://github.com/meta-llama/llama
+https://arxiv.org/abs/2302.13971
+
+Some pieces are based on the implementation of the original MAE:
+https://github.com/facebookresearch/mae
+https//arxiv.org/abs/2111.06377 
+"""
 
 class EncoderConfig(BaseModel):
     """
@@ -24,17 +35,18 @@ class EncoderConfig(BaseModel):
     d_model: int = Field(768)
     nhead: int = Field(12)
     layer_norm_eps: float = Field(1e-12)
-    drop_rate: float = Field(0.)
-    drop_path_rate: float = Field(0.)
     depth: int = Field(12)
     # To manually set the dimension of the MLP, change dim_feedforward.
     dim_feedforward: Optional[int] = Field(None)
     # If dim_feedforward is None it's chosen by multiplying d_model by the mlp_ratio
     mlp_ratio: float = Field(4.)
-    hidden_dropout_prob: float = Field(0.1)
-    attention_probs_dropout_prob: float = Field(0.1)
+    # Stochastic depth value
+    drop_path_rate: float = Field(0.)
+    # Dropout to be applied throughout the Transformer
+    hidden_drop_rate: float = Field(0.)
+    attn_proj_drop_rate: float = Field(0.)
     attn_drop_rate: float = Field(0.)
-    multiple_of: int = Field(2)
+    pos_drop_rate: float = Field(0.)
 
 
 class RoMABaseConfig(BaseSettings):
@@ -44,8 +56,6 @@ class RoMABaseConfig(BaseSettings):
     """
     encoder_config: EncoderConfig
     pos_encoding: Literal["ropend", "absolute"] = Field("ropend")
-    # Dropout to be applied to the positional encoding
-    pos_drop: float = Field(0.)
     # Maximum length of an input, used when precomputing static positional
     # encodings.
     max_len: int = Field(1500)
@@ -59,7 +69,7 @@ class RoMAForClassificationConfig(RoMABaseConfig):
     Configuration parameters for RoMAForClassification.
     """
     model_config = SettingsConfigDict(
-        env_prefix='ROBITE_BASIC_',
+        env_prefix='ROMA_CLASSIFIER_',
         env_file='.env',
         extra="ignore",
         env_nested_delimiter='__'
@@ -72,7 +82,7 @@ class RoMAForPreTrainingConfig(RoMABaseConfig):
     Configuration parameters for the RoMAForPretraining model.
     """
     model_config = SettingsConfigDict(
-        env_prefix='ROBITE_INTERP_',
+        env_prefix='ROMA_PRETRAIN_',
         env_file='.env',
         extra="ignore",
         env_nested_delimiter='__'
@@ -92,8 +102,7 @@ class RoMAForPreTrainingConfig(RoMABaseConfig):
     )
 
 
-def _get_inpt_pos_embedding(pos_encoding: str, d_model: int,
-                            pos_drop: float, max_len: int) -> nn.Module:
+def _get_inpt_pos_embedding(pos_encoding: str, d_model: int, max_len: int) -> nn.Module:
     """
     Parse the config and return the relevant positional encoding function to
     be applied at the input.
@@ -104,15 +113,13 @@ def _get_inpt_pos_embedding(pos_encoding: str, d_model: int,
         case "absolute":
             return AbsoluteSinCosine(
                 d_model=d_model,
-                dropout=pos_drop,
                 max_len=max_len
             )
         case _:
             return DummyPosEmbedding()
 
 
-def _get_attn_pos_embedding(pos_encoding: str, d_model: int,
-                            nhead: int, pos_drop: float) -> nn.Module:
+def _get_attn_pos_embedding(pos_encoding: str, d_model: int, nhead: int) -> nn.Module:
     """
     Parse the config and return the relevant positional encoding function to
     be applied at each attention block.
@@ -122,8 +129,7 @@ def _get_attn_pos_embedding(pos_encoding: str, d_model: int,
         case "ropend":
             return RoPENd(
                 n_dims=3,
-                d_model=d_model // nhead,
-                dropout=pos_drop
+                d_model=d_model // nhead
             )
         case _:
             return DummyPosEmbedding()
@@ -138,7 +144,7 @@ def _init_weights(m):
         nn.init.trunc_normal_(m.weight, std=.02)
         if isinstance(m, nn.Linear) and m.bias is not None:
             nn.init.constant_(m.bias, 0)
-    elif isinstance(m, RMSNorm):
+    elif isinstance(m, nn.RMSNorm):
         nn.init.constant_(m.weight, 1.0)
 
 
@@ -166,11 +172,13 @@ class RoMABase(nn.Module):
     Base RoMA model class. Contains common layers shared between all RoMA
     models.
     """
-    def __init__(self, config: RoMABaseConfig, d_model: int, *args, **kwargs):
+    def __init__(self, config: RoMABaseConfig, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.loss_fn: Optional[Callable[[torch.Tensor, torch.Tensor], torch.Tensor]]
         self.loss_fn = None
         self.head = None
+
+        self.inpt_pos_dropout = nn.Dropout(config.encoder_config.pos_drop_rate)
 
         # All models use the exact same encoder
         self.encoder: nn.Module = Encoder(
@@ -181,49 +189,53 @@ class RoMABase(nn.Module):
                 config.tubelet_size[0] * config.tubelet_size[1] *
                 config.tubelet_size[2] * config.n_channels
         )
-        self.projection = nn.Linear(proj_input_dim, d_model)
+        self.projection = nn.Linear(proj_input_dim, config.encoder_config.d_model)
 
         # Classification token
-        self.register_parameter("cls", nn.Parameter(torch.zeros(d_model)))
+        self.register_parameter(
+            "cls",
+            nn.Parameter(torch.zeros(config.encoder_config.d_model))
+        )
         nn.init.trunc_normal_(self.cls, std=.02)
 
         # A useful zero buffer
         self.register_buffer("zeros", torch.zeros(1))
 
-
-    @staticmethod
-    def get_pos_embs(config: RoMABaseConfig, nhead: int, d_model: int) -> tuple[nn.Module, nn.Module]:
-        """Load positional embeddings based on the provided config.
+    def apply_head_loss(self, x, label: torch.Tensor | None):
+        """Apply head and calculate loss
         """
-        # Positional embeddings applied before encoder forward pass, usually
-        # absolute ones like the standard sin/cos in the original Transformer
+        logits = self.head(x)
+        loss = self.get_loss(logits, label)
+        return logits, loss
+
+    def get_pos_embs(self, config: RoMABaseConfig, nhead: int, d_model: int) -> tuple[nn.Module, nn.Module]:
+        """Load positional embeddings based on the provided config and add
+        dropout to them.
+        """
         inpt_pos_embedding = _get_inpt_pos_embedding(
-            pos_encoding=config.pos_encoding,
-            d_model=d_model,
-            pos_drop=config.pos_drop,
-            max_len=config.max_len
+                pos_encoding=config.pos_encoding,
+                d_model=d_model,
+                max_len=config.max_len
         )
-        # Positional embeddings applied within each attention block, usually
-        # relative (Continuous-RoPEND)
         attn_pos_embedding = _get_attn_pos_embedding(
             pos_encoding=config.pos_encoding,
             d_model=d_model,
             nhead=nhead,
-            pos_drop=config.pos_drop
         )
         return inpt_pos_embedding, attn_pos_embedding
 
     def set_loss_fn(self, loss_fn):
-        """Manually set the model loss function.
-        The loss function should accept outputs from the model head and the
-        labels provided to the forward call.
+        """
+        Manually set the model loss function. The loss function should accept
+        prediction and target tensors.
         """
         self.loss_fn = loss_fn
 
     def set_head(self, head):
-        """Manually set the model head.
-        The head accepts the raw output embeddings from the final layer of
-        the model and returns something that can be fed into the loss function.
+        """
+        Manually set the model head. The head accepts the raw output embeddings
+        from the final layer of the model and returns something that can be fed
+        into the loss function.
         """
         self.head = head
 
@@ -251,7 +263,7 @@ class RoMABase(nn.Module):
 
 class RoMAForPreTraining(RoMABase):
     def __init__(self, config: RoMAForPreTrainingConfig, *args, **kwargs):
-        super().__init__(config, config.encoder_config.d_model, *args, **kwargs)
+        super().__init__(config,  *args, **kwargs)
         self.config: RoMAForPreTrainingConfig = config
         self.decoder = Encoder(config.decoder_config)
         # Projection from encoder embedding dimension to decoder
@@ -281,9 +293,21 @@ class RoMAForPreTraining(RoMABase):
         self.decoder_inpt_pos_embedding.reset_cache()
         self.decoder_attn_pos_embedding.reset_cache()
 
+    def normalize_targets(self, x):
+        """
+        Normalize the input values. Normalization is applied individually
+        for each tubelet, therefore this would be invalid for a tubelet
+        size of (1, 1, 1), as all values would just be zero.
+        """
+        if self.config.normalize_targets:
+            mean = x.mean(dim=-1, keepdim=True)
+            var = x.var(dim=-1, keepdim=True)
+            x = (x - mean) / (var + 1.e-6) ** .5
+        return x
+
     def forward(self, values: torch.Tensor, mask: torch.Tensor,
                 positions: torch.Tensor, pad_mask=None,
-                label=None) -> tuple[torch.Tensor, torch.Tensor]:
+                label=None) -> tuple[torch.Tensor | None, torch.Tensor | None]:
         b = values.shape[0]
         # Convert input to a sequence of tubelets
         x = patchify(self.config.tubelet_size, values)
@@ -303,7 +327,7 @@ class RoMAForPreTraining(RoMABase):
         # Add classification token to the beginning of all relevant tensors
         x, positions, pad_mask = self.add_cls(x, positions, pad_mask)
 
-        x = self.encoder_inpt_pos_embedding(x, positions)
+        x = self.inpt_pos_dropout(self.encoder_inpt_pos_embedding(x, positions))
 
         attn_mask = _get_attn_mask(x.shape, x.device, pad_mask)
 
@@ -337,21 +361,12 @@ class RoMAForPreTraining(RoMABase):
             pos_encoding=self.decoder_attn_pos_embedding,
             attn_mask=attn_mask
         )
+        m_x = self.normalize_targets(m_x)
+        x = x[:, -m_x.shape[-2]:]
 
-        # Get predictions
-        logits = self.head(x[:, -m_x.shape[-2]:])
-
-        # Normalize the target values. Normalization is applied individually
-        # for each tubelet, therefore this would be invalid for a tubelet
-        # size of (1, 1, 1), as all values would just be zero.
-        if self.config.normalize_targets:
-            mean = m_x.mean(dim=-1, keepdim=True)
-            var = m_x.var(dim=-1, keepdim=True)
-            m_x = (m_x - mean) / (var + 1.e-6) ** .5
-
-        loss = None
+        logits, loss = None, None
         if m_x.shape[1] != 0:
-            loss = self.get_loss(logits, m_x)
+            logits, loss = self.apply_head_loss(x, m_x)
 
         # We reset the positional embedding caches to avoid
         # inter-loop dependencies in the Trainer, which break torch compile.
@@ -367,7 +382,7 @@ class RoMAForClassification(RoMABase):
     weights from RoMAForPreTraining.
     """
     def __init__(self, config: RoMAForClassificationConfig, *args, **kwargs):
-        super().__init__(config=config, d_model=config.encoder_config.d_model, *args, **kwargs)
+        super().__init__(config=config, *args, **kwargs)
         self.config: RoMAForClassificationConfig = config
         self.set_head(
             ClassificationHead(
@@ -387,21 +402,26 @@ class RoMAForClassification(RoMABase):
         """
         Initialize the model from a pre-trained checkpoint created by
         RoMAForPreTraining.
+        Parameters such as dropout are not brought over to allow for
+        overriding during fine-tuning.
         """
-        # First load the pretrained model
         p_model = load_from_checkpoint(
             checkpoint, RoMAForPreTraining, RoMAForPreTrainingConfig
         )
-        # Because we are only using the Encoder, we take the config for that
-        # out and create a new config for classification.
+        encoder_config = p_model.config.encoder_config
+
         finetune_config = RoMAForClassificationConfig(
-            encoder_config=p_model.config.encoder_config,
             pos_encoding=p_model.config.pos_encoding,
             tubelet_size=p_model.config.tubelet_size,
             n_channels=p_model.config.n_channels,
             max_len=p_model.config.max_len,
             **kwargs
         )
+        encoder_attrs = ["d_model", "nhead", "depth", "dim_feedforward",
+                         "layer_norm_eps", "mlp_ratio"]
+        for attr in encoder_attrs:
+            setattr(finetune_config.encoder_config, attr, getattr(encoder_config, attr))
+
         model = RoMAForClassification(config=finetune_config)
         # Copy over all the encoder weights
         with torch.no_grad():
@@ -420,31 +440,20 @@ class RoMAForClassification(RoMABase):
 
     def forward(self, values: torch.Tensor, positions: torch.Tensor,
                 pad_mask=None, label=None) -> tuple[torch.Tensor, torch.Tensor]:
-        # Convert input to a sequence of tubelets
         x = patchify(self.config.tubelet_size, values)
-
-        # Project tubelets into the embedding dimension
         x = self.projection(x)
-        # Append the CLS token to the start of the sequence
         x, positions, pad_mask = self.add_cls(x, positions, pad_mask)
         attn_mask = _get_attn_mask(x.shape, x.device, pad_mask)
         x = self.inpt_pos_embedding(x, positions)
-        # Encoder forward pass
         x = self.encoder(
             x,
             positions=positions,
             pos_encoding=self.attn_pos_embedding,
             attn_mask=attn_mask
         )
+        logits, loss = self.apply_head_loss(x, label)
 
-        # Apply head and calculate loss
-        logits = self.head(x)
-        loss = self.get_loss(logits, label)
-
-        # We reset the positional embedding caches to avoid
-        # inter-loop dependencies in the Trainer.
         self.reset_pos_cache()
-
         return logits, loss
 
 
@@ -456,7 +465,7 @@ class ClassificationHead(nn.Module):
         super().__init__(*args, **kwargs)
         self.head = nn.Sequential(
             nn.Dropout(head_drop_rate),
-            RMSNorm(d_model, layer_norm_eps),
+            nn.RMSNorm(d_model, layer_norm_eps),
             nn.Linear(d_model, d_output)
         )
 
@@ -475,7 +484,7 @@ class InterpolationHead(nn.Module):
         super().__init__(*args, **kwargs)
         self.head = nn.Sequential(
             nn.Dropout(head_drop_rate),
-            RMSNorm(d_model, layer_norm_eps),
+            nn.RMSNorm(d_model, layer_norm_eps),
             nn.Linear(d_model, d_output)
         )
 
@@ -484,6 +493,8 @@ class InterpolationHead(nn.Module):
 
 
 class Encoder(nn.Module):
+    """Transformer encoder module.
+    """
     def __init__(self, config: EncoderConfig, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.config: EncoderConfig = config
@@ -499,18 +510,6 @@ class Encoder(nn.Module):
         return x
 
 
-def repeat_kv(x: torch.Tensor, n_rep: int) -> torch.Tensor:
-    """torch.repeat_interleave(x, dim=2, repeats=n_rep)"""
-    bs, slen, n_kv_heads, head_dim = x.shape
-    if n_rep == 1:
-        return x
-    return (
-        x[:, :, :, None, :]
-        .expand(bs, slen, n_kv_heads, n_rep, head_dim)
-        .reshape(bs, slen, n_kv_heads * n_rep, head_dim)
-    )
-
-
 class Attention(nn.Module):
     """Multi-head attention module."""
 
@@ -524,7 +523,9 @@ class Attention(nn.Module):
         super().__init__()
         self.n_kv_heads = config.nhead
         self.head_dim = config.d_model // config.nhead
-
+        self.attn_dropout_val = config.attn_drop_rate
+        self.proj_dropout = nn.Dropout(config.attn_proj_drop_rate)
+        self.pos_dropout = nn.Dropout(config.pos_drop_rate)
         self.wq = nn.Linear(
             config.d_model,
             config.nhead * self.head_dim,
@@ -574,20 +575,18 @@ class Attention(nn.Module):
         xv = xv.view(bsz, seqlen, self.n_kv_heads, self.head_dim)
 
         if pos_emb is not None:
-            xq, xk = pos_emb(xq, positions), pos_emb(xk, positions)
+            xq, xk = self.pos_dropout(pos_emb(xq, positions)), self.pos_dropout(pos_emb(xk, positions))
 
         xq = xq.transpose(1, 2)  # (bs, n_local_heads, seqlen, head_dim)
         keys = xk.transpose(1, 2)  # (bs, n_local_heads, cache_len + seqlen, head_dim)
         values = xv.transpose(1, 2)  # (bs, n_local_heads, cache_len + seqlen, head_dim)
-        scores = torch.matmul(xq, keys.transpose(2, 3)) / math.sqrt(
-            self.head_dim)
-        if mask is not None:
-            scores = scores + mask  # (bs, n_local_heads, seqlen, cache_len + seqlen)
-        scores = F.softmax(scores.float(), dim=-1).type_as(xq)
-        output = torch.matmul(scores,
-                              values)  # (bs, n_local_heads, seqlen, head_dim)
+        output = F.scaled_dot_product_attention(
+            xq, keys, values,
+            attn_mask=mask,
+            dropout_p=self.attn_dropout_val if self.training else 0.
+        )
         output = output.transpose(1, 2).contiguous().view(bsz, seqlen, -1)
-        return self.wo(output)
+        return self.proj_dropout(self.wo(output))
 
 
 class FeedForward(nn.Module):
@@ -595,26 +594,25 @@ class FeedForward(nn.Module):
             self,
             dim: int,
             hidden_dim: int,
-            multiple_of: int
+            dropout: float
     ):
         """
         Initialize the FeedForward module.
 
         Args:
-            dim (int): Input dimension.
-            hidden_dim (int): Hidden dimension of the feedforward layer.
-            multiple_of (int): Value to ensure hidden dimension is a multiple of this value.
+            dim : int
+                Input dimension
+            hidden_dim : int
+                Hidden dimension of the feedforward layer.
+            dropout : float
         """
         super().__init__()
-        hidden_dim = int(2 * hidden_dim / 3)
-        hidden_dim = multiple_of * (
-                    (hidden_dim + multiple_of - 1) // multiple_of)
-
         self.w1 = nn.Linear(dim, hidden_dim, bias=False)
         self.w2 = nn.Linear(hidden_dim, dim, bias=False)
+        self.dropout = nn.Dropout(dropout)
 
     def forward(self, x):
-        return self.w2(F.silu(self.w1(x)))
+        return self.dropout(self.w2(F.silu(self.w1(x))))
 
 
 class TransformerBlock(nn.Module):
@@ -633,16 +631,17 @@ class TransformerBlock(nn.Module):
         self.dim = config.d_model
         self.head_dim = config.d_model // config.nhead
         self.attention = Attention(config)
+        self.drop_path = get_drop_path(config.drop_path_rate, layer_id, config.depth)
 
         hidden_dim = config.dim_feedforward if config.dim_feedforward is not None else 4 * config.d_model
         self.feed_forward = FeedForward(
             dim=config.d_model,
             hidden_dim=hidden_dim,
-            multiple_of=config.multiple_of
+            dropout=config.hidden_drop_rate
         )
         self.layer_id = layer_id
-        self.attention_norm = RMSNorm(config.d_model, eps=config.layer_norm_eps)
-        self.ffn_norm = RMSNorm(config.d_model, eps=config.layer_norm_eps)
+        self.attention_norm = nn.RMSNorm(config.d_model, eps=config.layer_norm_eps)
+        self.ffn_norm = nn.RMSNorm(config.d_model, eps=config.layer_norm_eps)
 
     def forward(
             self,
@@ -655,17 +654,21 @@ class TransformerBlock(nn.Module):
         Perform a forward pass through the TransformerBlock.
 
         Args:
-            x (torch.Tensor): Input tensor.
-            positions (list[torch.Tensor]): Positions for all tokens.
-            pos_embed (RoPENd): Positional embedding transformation.
-            mask (torch.Tensor, optional): Masking tensor for attention. Defaults to None.
+            x : torch.Tensor
+                Input tensor.
+            positions : torch.Tensor
+                Positions for all tokens.
+            pos_embed : RoPENd, optional
+                Positional embedding transformation.
+            mask : torch.Tensor, optional
+                Masking tensor for attention. Defaults to None.
 
         Returns:
             torch.Tensor: Output tensor after applying attention and feedforward layers.
 
         """
-        h = x + self.attention(
+        h = x + self.drop_path(self.attention(
             self.attention_norm(x), positions, pos_embed, mask
-        )
-        out = h + self.feed_forward(self.ffn_norm(h))
+        ))
+        out = h + self.drop_path(self.feed_forward(self.ffn_norm(h)))
         return out

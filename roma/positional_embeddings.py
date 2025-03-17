@@ -28,12 +28,11 @@ class DummyPosEmbedding(nn.Module, BasePosEmbedding):
 class RoPENd(nn.Module, BasePosEmbedding):
     """N-dimensional Continuous Rotary Positional Embedding.
     """
-    def __init__(self, n_dims, d_model, base=10000, dropout=0.):
+    def __init__(self, n_dims, d_model, base=10000):
         super(RoPENd, self).__init__()
         k_max = d_model // (2 * n_dims)
         self.head_dim = d_model
         self.subdim = d_model // n_dims
-        self.dropout = nn.Dropout(dropout)
 
         assert d_model % k_max == 0, f'shape[-1] ({d_model}) is not divisible by 2 * len(shape[:-1]) ({2 * n_dims})'
 
@@ -75,8 +74,7 @@ class RoPENd(nn.Module, BasePosEmbedding):
 
         x = x * rotations[..., None, :]
         x = torch.view_as_real(x).reshape(B, N, H, E)
-
-        return self.dropout(x)
+        return x
 
 
 class AbsoluteSinCosine(nn.Module, BasePosEmbedding):
@@ -86,10 +84,8 @@ class AbsoluteSinCosine(nn.Module, BasePosEmbedding):
     References:
     PyTorch: https://pytorch.org/tutorials/beginner/transformer_tutorial.html
     """
-    def __init__(self, d_model: int, dropout: float = 0., max_len: int = 2000):
+    def __init__(self, d_model: int, max_len: int = 2000):
         super(AbsoluteSinCosine, self).__init__()
-        self.dropout = nn.Dropout(p=dropout)
-
         position = torch.arange(max_len).unsqueeze(1)
         div_term = torch.exp(torch.arange(0, d_model, 2) * (-math.log(10000.0) / d_model))
         pe = torch.zeros(max_len, d_model)
@@ -110,4 +106,4 @@ class AbsoluteSinCosine(nn.Module, BasePosEmbedding):
         t = t[..., None] + idxs[1][:, None, :]
         t = t[..., None] + idxs[2][:, None, None, :]
         x = x + self.pe[t.view(B, -1)]
-        return self.dropout(x)
+        return x
