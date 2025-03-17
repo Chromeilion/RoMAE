@@ -32,10 +32,10 @@ class EncoderConfig(BaseModel):
     """
     RoMA Encoder configuration values.
     """
-    d_model: int = Field(768)
-    nhead: int = Field(12)
+    d_model: int = Field(342)
+    nhead: int = Field(8)
     layer_norm_eps: float = Field(1e-12)
-    depth: int = Field(12)
+    depth: int = Field(6)
     # To manually set the dimension of the MLP, change dim_feedforward.
     dim_feedforward: Optional[int] = Field(None)
     # If dim_feedforward is None it's chosen by multiplying d_model by the mlp_ratio
@@ -257,7 +257,8 @@ class RoMABase(nn.Module):
         # Add classification token to the beginning of all relevant tensors
         x = torch.cat((self.cls.expand(x.shape[0], 1, -1), x), dim=1)
         positions = torch.cat([self.zeros.expand(x.shape[0], positions.shape[1], -1), positions], dim=2)
-        pad_mask = torch.cat([(self.zeros > .5).expand(x.shape[0], -1), pad_mask], dim=1)
+        if pad_mask is not None:
+            pad_mask = torch.cat([(self.zeros > .5).expand(x.shape[0], -1), pad_mask], dim=1)
         return x, positions, pad_mask
 
 
