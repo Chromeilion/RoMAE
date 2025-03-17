@@ -1,5 +1,3 @@
-from roma.model import RoMAForClassificationConfig
-
 # Rotary Masked Autoencoder
 
 General purpose implementation of the RoMA model.
