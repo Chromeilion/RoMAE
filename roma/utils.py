@@ -321,3 +321,36 @@ def get_drop_path(drop_path_rate: float, layer_id: int, depth: int):
                 (layer_id / (depth - 1)) * drop_path_rate)
     else:
         return nn.Identity()
+
+
+def get_encoder_size(size: str):
+    """
+    Get the parameters of a specific RoMA model encoder size.
+    """
+    match size:
+        case "RoMA-tiny":
+            return {
+                "d_model": 198,
+                "nhead": 3,
+                "depth": 12
+            }
+        case "RoMA-small":
+            return {
+                "d_model": 396,
+                "nhead": 6,
+                "depth": 12
+            }
+        case "RoMA-base":
+            return {
+                "d_model": 792,
+                "nhead": 12,
+                "depth": 12
+            }
+        case "RoMA-large":
+            return {
+                "d_model": 1056,
+                "nhead": 16,
+                "depth": 24
+            }
+        case _:
+            raise ValueError(f"Unknown encoder size: {size}")

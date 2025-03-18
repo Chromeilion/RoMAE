@@ -634,7 +634,7 @@ class TransformerBlock(nn.Module):
         self.attention = Attention(config)
         self.drop_path = get_drop_path(config.drop_path_rate, layer_id, config.depth)
 
-        hidden_dim = config.dim_feedforward if config.dim_feedforward is not None else 4 * config.d_model
+        hidden_dim = config.dim_feedforward if config.dim_feedforward is not None else round(config.mlp_ratio * config.d_model)
         self.feed_forward = FeedForward(
             dim=config.d_model,
             hidden_dim=hidden_dim,

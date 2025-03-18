@@ -70,7 +70,7 @@ the fields mentioned above, we can then conduct training as follows:
 # we assume the datasets already exist
 train_ds, test_ds = get_datasets()
 trainer = Trainer(TrainerConfig())
-model = RoMAForClassification(RoMAForClassificationConfig)
+model = RoMAForClassification(RoMAForClassificationConfig())
 trainer.train(
   train_dataset=train_ds,
   test_dataset=test_ds,
@@ -103,3 +103,49 @@ To run the script, some environment variables have to be set in a .env file.
 These are described at the top of the script.
 With this, the script can wrap any executable Python module that makes use of 
 the Trainer, forwarding all arguments to the module.
+
+## Hyperparameter Tips
+
+Here I'll list some tips for model sizes and hyperparameter values that may 
+be useful to  try.
+
+**Model Sizes:**
+
+The most similar model to RoMA is the Vision Transformer. Therefore, it makes
+sense to keep sizes similar. One difference between the two is that 
+the head embedding dimension must be divisible by 6 in order to be able to 
+apply the rotary positional embeddings. Therefore, the sizes I provide here 
+are slightly different but still close to their ViT counterparts.
+
+| Size       | d_model | nhead | depth |
+|------------|---------|-------|-------|
+| RoMA-tiny  | 198     | 3     | 12    |
+| RoMA-small | 396     | 6     | 12    |
+| RoMA-base  | 792     | 12    | 12    |
+| RoMA-large | 1056    | 16    | 24    |
+
+To get a useful dictionary of all these parameters, you can use:
+
+```Python
+encoder_size_args = roma.utils.get_encoder_size("RoMA-tiny")
+encoder_config = roma.model.EncoderConfig(**encoder_size_args)
+```
+
+**Regularization:**
+
+RoMA implements both regular [dropout](https://arxiv.org/abs/1207.0580) and 
+[stochastic depth](https://arxiv.org/abs/1603.09382). When using 
+regularization, I recommend you take a look at ["How to train your ViT?"](https://arxiv.org/abs/2106.10270).
+In general, if you add regularization you should also increase the number of 
+epochs you are training for.
+Data augmentation is very important too. This should be considered on a 
+per-dataset basis however.
+
+The encoder config provides fine-grained controls for where dropout is 
+applied. The common approach is to use the same dropout value for:
+
+- ```hidden_drop_rate``` (applies dropout in the MLP layer)
+- ```attn_drop_rate``` (applies dropout on the attention probabilities)
+
+The others can be set to zero, but feel free to experiment!
+
