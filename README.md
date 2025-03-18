@@ -149,3 +149,19 @@ applied. The common approach is to use the same dropout value for:
 
 The others can be set to zero, but feel free to experiment!
 
+**Learning rate scaling:**
+
+The Trainer has support for the [linear scaling rule](https://arxiv.org/abs/1706.02677). 
+E.g. automatically scaling the learning rate with the number of processes 
+using the following formula:
+
+$$
+lr_{new} = lr*np
+$$
+
+Where $np$ is the number of processes (with each process corresponding to a GPU). 
+When training on one GPU, this does nothing, and even when training on a small number it probably does not 
+matter. However, if you want to train on a larger number you should 
+consider using it. This way, you can choose your hyperparameters by testing on 
+one GPU, and then run the full training on many GPU's without having to change 
+them.
