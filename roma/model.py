@@ -54,7 +54,7 @@ class RoMABaseConfig(BaseSettings):
     RoMA base configuration, shared by RoMAForClassification and
     RoMAForInterpolation.
     """
-    encoder_config: EncoderConfig
+    encoder_config: EncoderConfig = Field(EncoderConfig())
     pos_encoding: Literal["ropend", "absolute"] = Field("ropend")
     # Maximum length of an input, used when precomputing static positional
     # encodings.
