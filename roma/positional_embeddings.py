@@ -25,58 +25,6 @@ class DummyPosEmbedding(nn.Module, BasePosEmbedding):
         return x
 
 
-class RoPENd(nn.Module, BasePosEmbedding):
-    """N-dimensional Continuous Rotary Positional Embedding.
-    """
-    def __init__(self, n_dims, d_model, base=10000):
-        super(RoPENd, self).__init__()
-        k_max = d_model // (2 * n_dims)
-        self.head_dim = d_model
-        self.subdim = d_model // n_dims
-
-        assert d_model % k_max == 0, f'shape[-1] ({d_model}) is not divisible by 2 * len(shape[:-1]) ({2 * n_dims})'
-
-        self.register_buffer(
-            "theta_ks",
-            (1 / (base ** (torch.arange(k_max) / k_max))).float()
-        )
-
-        self.prev_positions = None
-        self.cache = None
-
-    def reset_cache(self):
-        self.cache = None
-        self.prev_positions = None
-
-    def build_angles(self, B, positions: POSITIONS):
-        if self.prev_positions is not None:
-            if positions.shape == self.prev_positions.shape:
-                if torch.all(positions == self.prev_positions):
-                    return self.cache
-
-        freqs = torch.matmul(
-            positions.unsqueeze(3),
-            self.theta_ks[None, None, ...].expand(B, -1, -1).unsqueeze(2)).permute(0, 2, 1, 3).reshape(B, positions.shape[-1], -1)
-
-        freqs_cis = torch.polar(torch.ones_like(freqs), freqs)  # complex64
-
-        self.cache = freqs_cis
-        self.prev_positions = positions
-        return freqs_cis
-
-    def forward(self, x, positions: torch.tensor):
-        B, N, H, E = x.shape
-
-        rotations = self.build_angles(B, positions)
-
-        # convert input into complex numbers to perform rotation
-        x = torch.view_as_complex(x.reshape(*x.shape[:-1], -1, 2))
-
-        x = x * rotations[..., None, :]
-        x = torch.view_as_real(x).reshape(B, N, H, E)
-        return x
-
-
 class AbsoluteSinCosine(nn.Module, BasePosEmbedding):
     """
     Based on the original encodings used in the paper.
@@ -106,4 +54,81 @@ class AbsoluteSinCosine(nn.Module, BasePosEmbedding):
         t = t[..., None] + idxs[1][:, None, :]
         t = t[..., None] + idxs[2][:, None, None, :]
         x = x + self.pe[t.view(B, -1)]
+        return x
+
+
+class NDPRope(nn.Module,  BasePosEmbedding):
+    """
+    N-dimensional continuous p-RoPE, based on the paper:
+    "Round and Round We Go! What Makes Rotary Positional Encodings Useful?"
+    https://openreview.net/forum?id=GtvuNrk58a
+    """
+    def __init__(self, head_dim: int, base=10000, p=1, n_dims: int=1, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        if head_dim % n_dims != 0:
+            raise AttributeError(f"The head dimension ({head_dim}) is not "
+                                 f"divisible by the number of positional axis ({n_dims})!")
+        if 0 > p or p > 1:
+            raise AttributeError(f"Provided p value ({p}) is not between 0 and 1!")
+
+        self.axis_dim = head_dim // n_dims
+
+        rope_angles = int(p * self.axis_dim // 2)
+        nope_angles = self.axis_dim // 2 - rope_angles
+
+        fraction = 2. * torch.arange(0, rope_angles) / self.axis_dim
+        self.register_buffer("timescale", nn.Parameter(nn.functional.pad(
+            base ** fraction,
+            (0, nope_angles),
+            mode='constant',
+            value=torch.inf
+        )))
+
+        self.prev_positions = None
+        self.cache = None
+
+    def reset_cache(self):
+        self.cache = None
+        self.prev_positions = None
+
+    def get_sin_cos(self, positions):
+        if self.prev_positions is not None:
+            if positions.shape == self.prev_positions.shape:
+                if torch.all(positions == self.prev_positions):
+                    return self.cache
+        sinusoid_inp = (
+                positions[..., torch.newaxis] / self.timescale[torch.newaxis,
+                                                torch.newaxis, :]
+        )
+        sinusoid_inp = sinusoid_inp[..., torch.newaxis, :]
+        sin = torch.sin(sinusoid_inp)
+        cos = torch.cos(sinusoid_inp)
+
+        self.cache = (sin, cos)
+        self.prev_positions = positions
+        return sin, cos
+
+    def apply_ndprope(self, x, positions):
+        sin, cos = self.get_sin_cos(positions)
+        first_half, second_half = torch.tensor_split(x, 2, dim=-1)
+        first_part = first_half * cos - second_half * sin
+        second_part = second_half * cos + first_half * sin
+        out = torch.concatenate([first_part, second_part], dim=-1)
+        return out.to(x.dtype)
+
+    def forward(self, x, positions):
+        """
+        Parameters
+        ----------
+        x
+        positions : Tensor, shape ``[batch_size, ndim, seq_len]``
+            For 3D position, this would be ```[batch_size, 3, seq_len]```.
+        """
+        B, seq_len, nhead, head_dim = x.shape
+        # Collapse embeddings into the sequence dimension
+        x = x.permute([0, 2, 1, 3])
+        x = x.reshape(B, nhead, -1, self.axis_dim).permute([0, 2, 1, 3])
+        x = self.apply_ndprope(x, positions.reshape(B, -1))
+        x = x.permute([0, 2, 1, 3])
+        x = x.reshape(B, nhead, seq_len, head_dim).permute([0, 2, 1, 3])
         return x

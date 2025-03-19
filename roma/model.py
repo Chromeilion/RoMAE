@@ -10,7 +10,7 @@ from pydantic import Field, BaseModel
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from roma.positional_embeddings import (
-    RoPENd,
+    NDPRope,
     AbsoluteSinCosine,
     DummyPosEmbedding,
 )
@@ -55,13 +55,15 @@ class RoMABaseConfig(BaseSettings):
     RoMAForInterpolation.
     """
     encoder_config: EncoderConfig = Field(EncoderConfig())
-    pos_encoding: Literal["ropend", "absolute"] = Field("ropend")
+    pos_encoding: Literal["ropend", "ndprope", "absolute"] = Field("ropend")
     # Maximum length of an input, used when precomputing static positional
     # encodings.
     max_len: int = Field(1500)
     tubelet_size: tuple[int, int, int] = Field((1, 1, 16))
     n_channels: int = Field(1)
     head_drop_rate: float = Field(0.)
+    n_pos_dims: int = Field(3)
+    p_rope_val: float = Field(0.75)
 
 
 class RoMAForClassificationConfig(RoMABaseConfig):
@@ -119,7 +121,8 @@ def _get_inpt_pos_embedding(pos_encoding: str, d_model: int, max_len: int) -> nn
             return DummyPosEmbedding()
 
 
-def _get_attn_pos_embedding(pos_encoding: str, d_model: int, nhead: int) -> nn.Module:
+def _get_attn_pos_embedding(pos_encoding: str, d_model: int, nhead: int, n_dims,
+                            p: float) -> nn.Module:
     """
     Parse the config and return the relevant positional encoding function to
     be applied at each attention block.
@@ -127,9 +130,10 @@ def _get_attn_pos_embedding(pos_encoding: str, d_model: int, nhead: int) -> nn.M
     """
     match pos_encoding:
         case "ropend":
-            return RoPENd(
-                n_dims=3,
-                d_model=d_model // nhead
+            return NDPRope(
+                n_dims=n_dims,
+                head_dim=d_model // nhead,
+                p=p
             )
         case _:
             return DummyPosEmbedding()
@@ -221,6 +225,8 @@ class RoMABase(nn.Module):
             pos_encoding=config.pos_encoding,
             d_model=d_model,
             nhead=nhead,
+            n_dims=config.n_pos_dims,
+            p=config.p_rope_val
         )
         return inpt_pos_embedding, attn_pos_embedding
 
@@ -552,7 +558,7 @@ class Attention(nn.Module):
             self,
             x: torch.Tensor,
             positions: Optional[list[torch.tensor]] = None,
-            pos_emb: Optional[RoPENd] = None,
+            pos_emb: Optional[NDPRope] = None,
             mask: Optional[torch.Tensor] = None,
     ):
         """
@@ -648,7 +654,7 @@ class TransformerBlock(nn.Module):
             self,
             x: torch.Tensor,
             positions: Optional[int] = None,
-            pos_embed: Optional[RoPENd] = None,
+            pos_embed: Optional[NDPRope] = None,
             mask: Optional[torch.Tensor] = None
     ):
         """
