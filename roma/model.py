@@ -259,7 +259,7 @@ class RoMABase(nn.Module):
             loss = self.loss_fn(logits, label)
         return loss
 
-    def add_cls(self, x, positions, pad_mask):
+    def add_cls(self, x, positions, pad_mask = None):
         # Add classification token to the beginning of all relevant tensors
         x = torch.cat((self.cls.expand(x.shape[0], 1, -1), x), dim=1)
         positions = torch.cat([self.zeros.expand(x.shape[0], positions.shape[1], -1), positions], dim=2)
@@ -323,12 +323,14 @@ class RoMAForPreTraining(RoMABase):
         # Extract all the values that are being masked out
         m_x = x[mask].reshape(b, -1, x.shape[-1])
         m_positions = positions[mask[:, None, ].expand(-1, npd, -1)].reshape(b, npd, -1)
-        m_pad_mask = pad_mask[mask].reshape(b, -1)
+        if pad_mask is not None:
+            m_pad_mask = pad_mask[mask].reshape(b, -1)
 
         # Now get all the values that are not masked out
         x = x[~mask].reshape(b, -1, x.shape[-1])
         positions = positions[~mask[:, None, ...].expand(-1, npd, -1)].reshape(b, npd, -1)
-        pad_mask = pad_mask[~mask].reshape(b, -1)
+        if pad_mask is not None:
+            pad_mask = pad_mask[~mask].reshape(b, -1)
 
         # Project into embeddings
         x = self.projection(x)
@@ -357,7 +359,8 @@ class RoMAForPreTraining(RoMABase):
         # Append MASK token and positional information
         x = torch.cat([x, mask_tokens], dim=1)
         positions = torch.cat([positions, m_positions], dim=2)
-        pad_mask = torch.cat([pad_mask, m_pad_mask], dim=1)
+        if pad_mask is not None:
+            pad_mask = torch.cat([pad_mask, m_pad_mask], dim=1)
 
         # Get our new attention and padding masks
         attn_mask = _get_attn_mask(x.shape, x.device, pad_mask)
