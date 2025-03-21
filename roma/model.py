@@ -316,17 +316,18 @@ class RoMAForPreTraining(RoMABase):
                 positions: torch.Tensor, pad_mask=None,
                 label=None) -> tuple[torch.Tensor | None, torch.Tensor | None]:
         b = values.shape[0]
+        npd = self.config.n_pos_dims
         # Convert input to a sequence of tubelets
         x = patchify(self.config.tubelet_size, values)
 
         # Extract all the values that are being masked out
         m_x = x[mask].reshape(b, -1, x.shape[-1])
-        m_positions = positions[mask[:, None, ].expand(-1, 3, -1)].reshape(b, 3, -1)
+        m_positions = positions[mask[:, None, ].expand(-1, npd, -1)].reshape(b, npd, -1)
         m_pad_mask = pad_mask[mask].reshape(b, -1)
 
         # Now get all the values that are not masked out
         x = x[~mask].reshape(b, -1, x.shape[-1])
-        positions = positions[~mask[:, None, ...].expand(-1, 3, -1)].reshape(b, 3, -1)
+        positions = positions[~mask[:, None, ...].expand(-1, npd, -1)].reshape(b, npd, -1)
         pad_mask = pad_mask[~mask].reshape(b, -1)
 
         # Project into embeddings
