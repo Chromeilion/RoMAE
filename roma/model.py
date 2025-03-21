@@ -55,7 +55,7 @@ class RoMABaseConfig(BaseSettings):
     RoMAForInterpolation.
     """
     encoder_config: EncoderConfig = Field(EncoderConfig())
-    pos_encoding: Literal["ropend", "ndprope", "absolute"] = Field("ropend")
+    pos_encoding: Literal["ropend", "absolute"] = Field("ropend")
     # Maximum length of an input, used when precomputing static positional
     # encodings.
     max_len: int = Field(1500)
@@ -89,7 +89,7 @@ class RoMAForPreTrainingConfig(RoMABaseConfig):
         extra="ignore",
         env_nested_delimiter='__'
     )
-    decoder_config: EncoderConfig
+    decoder_config: EncoderConfig = Field(EncoderConfig())
     mask_ratio: float = Field(
         .5,
         description="Percentage of tokens to mask out, the optimal value for "
