@@ -86,7 +86,7 @@ class TrainerConfig(BaseSettings):
         False,
         description="Whether to scale the learning rate with the number of "
                     "processes. When enabled, the learning rate will be scaled "
-                    "to a new value using base_lr*sqrt(np), where np is the "
+                    "to a new value using base_lr*np, where np is the "
                     "number of processes being used for training."
     )
 
@@ -128,7 +128,7 @@ class Trainer:
 
     def get_lr(self, accelerator):
         if self.config.lr_scaling:
-            return self.config.base_lr * math.sqrt(accelerator.num_processes)
+            return self.config.base_lr * accelerator.num_processes
         return self.config.base_lr
 
     def get_lr_scheduler(self, optimizer, warmup_steps, total_steps):
