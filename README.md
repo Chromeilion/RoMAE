@@ -165,3 +165,14 @@ matter. However, if you want to train on a larger number you should
 consider using it. This way, you can choose your hyperparameters by testing on 
 one GPU, and then run the full training on many GPU's without having to change 
 them.
+
+## Interpolation Predictions
+
+If you'd like to use RoMAForPreTraining for interpolation, you can first do a 
+normal training run.
+Then to use the learned weights, you can utilize the predict class method.
+This will take in your known values plus a set of positions you wish to predict 
+the values for and pass it through the model for you.
+Because the method is batched, it also has support for padding.
+When using padding, you must pass two padding arrays. One for the values, and 
+one for the predictions.
