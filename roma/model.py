@@ -385,6 +385,81 @@ class RoMAForPreTraining(RoMABase):
 
         return logits, loss
 
+    def predict(self, values: torch.Tensor, positions: torch.Tensor,
+                pred_positions: torch.Tensor, pad_mask=None, pred_pad_mask=None) -> torch.Tensor:
+        """
+        Take a set of values and their positions and do predictions on a
+        different set of positions.
+
+        Parameters
+        ----------
+        values : torch.Tensor
+            Known sequence values
+        positions : torch.Tensor
+            Positions corresponding to the values
+        pred_positions : torch.Tensor
+            A set of positions to predict
+        pad_mask : torch.Tensor
+            A pad mask with true in positions that are padded
+        pred_pad_mask : torch.Tensor
+            Same as pad mask but for the pred_positions
+
+        Returns
+        -------
+        logits : torch.Tensor
+            Model output logits for the predicted tokens
+        """
+        b = values.shape[0]
+        # Convert input to a sequence of tubelets
+        x = patchify(self.config.tubelet_size, values)
+        # Project into embeddings
+        x = self.projection(x)
+        # Add classification token to the beginning of all relevant tensors
+        x, positions, pad_mask = self.add_cls(x, positions, pad_mask)
+        # Apply positional embeddings and dropout
+        x = self.inpt_pos_dropout(self.encoder_inpt_pos_embedding(x, positions))
+        attn_mask = _get_attn_mask(x.shape, x.device, pad_mask)
+        # Encoder forward pass
+        x = self.encoder(
+            x,
+            positions=positions,
+            pos_encoding=self.encoder_attn_pos_embedding,
+            attn_mask=attn_mask
+        )
+        # Project tokens from the encoder dimension to decoder dimension
+        x = self.encoder_decoder_proj(x)
+        # Create a sequence of mask tokens representing the values we want to
+        # predict
+        mask_tokens = self.mask_token.expand(b, pred_positions.shape[2], -1)
+        mask_tokens = self.encoder_inpt_pos_embedding(mask_tokens, pred_positions)
+
+        # Append MASK tokens to the original sequence
+        x = torch.cat([x, mask_tokens], dim=1)
+        positions = torch.cat([positions, pred_positions], dim=2)
+        if pad_mask is not None and pred_pad_mask is not None:
+            pad_mask = torch.cat([pad_mask, pred_pad_mask], dim=1)
+
+        # Get our new attention and padding masks
+        attn_mask = _get_attn_mask(x.shape, x.device, pad_mask)
+
+        # Decoder forward pass
+        x = self.decoder(
+            x,
+            positions=positions,
+            pos_encoding=self.decoder_attn_pos_embedding,
+            attn_mask=attn_mask
+        )
+        # Extract our predicted values
+        x = x[:, -pred_positions.shape[-1]:]
+
+        logits = None
+        if pred_positions.shape[1] != 0:
+            logits = self.head(x)
+
+        self.reset_pos_cache()
+        return logits
+
+
 
 class RoMAForClassification(RoMABase):
     """
