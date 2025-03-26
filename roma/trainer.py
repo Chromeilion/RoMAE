@@ -37,7 +37,7 @@ class TrainerConfig(BaseSettings):
     eval_every: int
     save_every: int
     batch_size: int
-    optimizer: str = Field("sgd", description="Either sgd or adamw")
+    optimizer: str = Field("adamw", description="Either sgd or adamw")
     checkpoint_dir: str = Field(
         "./checkpoints",
         description="Where to save the model throughout training"
