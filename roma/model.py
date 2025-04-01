@@ -55,6 +55,11 @@ class RoMABaseConfig(BaseSettings):
     RoMAForInterpolation.
     """
     encoder_config: EncoderConfig = Field(EncoderConfig())
+    use_cls: bool = Field(
+        True,
+        description="Whether to insert a learned CLS token at the start of "
+                    "the sequence."
+    )
     pos_encoding: Literal["ropend", "absolute"] = Field("ropend")
     # Maximum length of an input, used when precomputing static positional
     # encodings.
@@ -196,11 +201,14 @@ class RoMABase(nn.Module):
         self.projection = nn.Linear(proj_input_dim, config.encoder_config.d_model)
 
         # Classification token
-        self.register_parameter(
-            "cls",
-            nn.Parameter(torch.zeros(config.encoder_config.d_model))
-        )
-        nn.init.trunc_normal_(self.cls, std=.02)
+        if config.use_cls:
+            self.register_parameter(
+                "cls",
+                nn.Parameter(torch.zeros(config.encoder_config.d_model))
+            )
+            nn.init.trunc_normal_(self.cls, std=.02)
+        else:
+            self.cls = None
 
         # A useful zero buffer
         self.register_buffer("zeros", torch.zeros(1))
@@ -259,12 +267,13 @@ class RoMABase(nn.Module):
             loss = self.loss_fn(logits, label)
         return loss
 
-    def add_cls(self, x, positions, pad_mask = None):
-        # Add classification token to the beginning of all relevant tensors
-        x = torch.cat((self.cls.expand(x.shape[0], 1, -1), x), dim=1)
-        positions = torch.cat([self.zeros.expand(x.shape[0], positions.shape[1], -1), positions], dim=2)
-        if pad_mask is not None:
-            pad_mask = torch.cat([(self.zeros > .5).expand(x.shape[0], -1), pad_mask], dim=1)
+    def add_cls(self, x, positions, pad_mask=None):
+        if self.cls is not None:
+            # Add classification token to the beginning of all relevant tensors
+            x = torch.cat((self.cls.expand(x.shape[0], 1, -1), x), dim=1)
+            positions = torch.cat([self.zeros.expand(x.shape[0], positions.shape[1], -1), positions], dim=2)
+            if pad_mask is not None:
+                pad_mask = torch.cat([(self.zeros > .5).expand(x.shape[0], -1), pad_mask], dim=1)
         return x, positions, pad_mask
 
 
@@ -314,7 +323,7 @@ class RoMAForPreTraining(RoMABase):
 
     def forward(self, values: torch.Tensor, mask: torch.Tensor,
                 positions: torch.Tensor, pad_mask=None,
-                label=None) -> tuple[torch.Tensor | None, torch.Tensor | None]:
+                label=None, *_, **__) -> tuple[torch.Tensor | None, torch.Tensor | None]:
         b = values.shape[0]
         npd = self.config.n_pos_dims
         # Convert input to a sequence of tubelets
@@ -470,13 +479,23 @@ class RoMAForClassification(RoMABase):
     def __init__(self, config: RoMAForClassificationConfig, *args, **kwargs):
         super().__init__(config=config, *args, **kwargs)
         self.config: RoMAForClassificationConfig = config
-        self.set_head(
-            ClassificationHead(
-                d_model=config.encoder_config.d_model,
-                d_output=config.dim_output,
-                layer_norm_eps=config.encoder_config.layer_norm_eps,
-                head_drop_rate=config.head_drop_rate
-        ))
+        if config.use_cls:
+            self.set_head(
+                CLSClassifierHead(
+                    d_model=config.encoder_config.d_model,
+                    d_output=config.dim_output,
+                    layer_norm_eps=config.encoder_config.layer_norm_eps,
+                    head_drop_rate=config.head_drop_rate
+            ))
+        else:
+            self.set_head(
+                MeanClassifierHead(
+                    d_model=config.encoder_config.d_model,
+                    d_output=config.dim_output,
+                    layer_norm_eps=config.encoder_config.layer_norm_eps,
+                    head_drop_rate=config.head_drop_rate
+                )
+            )
         self.set_loss_fn(nn.CrossEntropyLoss())
         self.inpt_pos_embedding, self.attn_pos_embedding = self.get_pos_embs(
             config, nhead=config.encoder_config.nhead, d_model=config.encoder_config.d_model
@@ -517,7 +536,8 @@ class RoMAForClassification(RoMABase):
                 p_model_state.items() if key.split(".")[0] == "encoder"
             }
             model.encoder.load_state_dict(encoder_keys)
-            model.cls.copy_(p_model.cls)
+            if model.cls is not None:
+                model.cls.copy_(p_model.cls)
         return model
 
     def reset_pos_cache(self):
@@ -543,7 +563,7 @@ class RoMAForClassification(RoMABase):
         return logits, loss
 
 
-class ClassificationHead(nn.Module):
+class CLSClassifierHead(nn.Module):
     """Simple default head utilizing the CLS token for classification.
     """
     def __init__(self, d_model: int, d_output: int, layer_norm_eps: float,
@@ -558,6 +578,24 @@ class ClassificationHead(nn.Module):
     def forward(self, x):
         # Take out the CLS token which is at position zero
         x = x[:, 0, :]
+        return self.head(x)
+
+
+class MeanClassifierHead(nn.Module):
+    """Simple default head utilizing the mean of all tokens for classification.
+    """
+    def __init__(self, d_model: int, d_output: int, layer_norm_eps: float,
+                 head_drop_rate: float, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.head = nn.Sequential(
+            nn.Dropout(head_drop_rate),
+            nn.RMSNorm(d_model, layer_norm_eps),
+            nn.Linear(d_model, d_output)
+        )
+
+    def forward(self, x):
+        # Get the mean
+        x = x.mean(dim=1)
         return self.head(x)
 
 
