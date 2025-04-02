@@ -119,10 +119,10 @@ are slightly different but still close to their ViT counterparts.
 
 | Size       | d_model | nhead | depth |
 |------------|---------|-------|-------|
-| RoMA-tiny  | 198     | 3     | 12    |
-| RoMA-small | 396     | 6     | 12    |
-| RoMA-base  | 792     | 12    | 12    |
-| RoMA-large | 1056    | 16    | 24    |
+| RoMA-tiny  | 180     | 3     | 12    |
+| RoMA-small | 432     | 6     | 12    |
+| RoMA-base  | 720     | 12    | 12    |
+| RoMA-large | 960     | 16    | 24    |
 
 To get a useful dictionary of all these parameters, you can use:
 
