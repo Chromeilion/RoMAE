@@ -278,25 +278,25 @@ def get_encoder_size(size: str):
     match size:
         case "RoMA-tiny":
             return {
-                "d_model": 198,
+                "d_model": 180,
                 "nhead": 3,
                 "depth": 12
             }
         case "RoMA-small":
             return {
-                "d_model": 396,
+                "d_model": 432,
                 "nhead": 6,
                 "depth": 12
             }
         case "RoMA-base":
             return {
-                "d_model": 792,
+                "d_model": 720,
                 "nhead": 12,
                 "depth": 12
             }
         case "RoMA-large":
             return {
-                "d_model": 1056,
+                "d_model": 960,
                 "nhead": 16,
                 "depth": 24
             }
