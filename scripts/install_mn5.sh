@@ -12,7 +12,7 @@ package_root_folder=/gpfs/projects/ehpc10/rmae/uzivanov/software
 # and for others the wheel is just way more convenient.
 
 module load mkl/2024.0 intel impi hdf5/1.14.1-2-gcc python/3.11.5-gcc nvidia-hpc-sdk/23.11-cuda11.8 openblas/0.3.27-gcc cudnn/9.0.0-cuda11 tensorrt/10.0.0-cuda11 impi/2021.11 gcc/11.4.0 nccl/2.19.4 pytorch/2.4.0
-python -m venv .venv
+python -m venv --system-site-packages .venv
 source .venv/bin/activate
 
 pip install $package_root_folder/safetensors-0.5.3-cp38-abi3-manylinux_2_17_x86_64.manylinux2014_x86_64.whl
@@ -42,6 +42,7 @@ pip install $package_root_folder/python_dotenv-1.1.0-py3-none-any.whl --no-index
 pip install $package_root_folder/pydantic_settings-2.8.1-py3-none-any.whl --no-index --no-build-isolation
 pip install $package_root_folder/nvidia_ml_py-12.570.86-py3-none-any.whl --no-index --no-build-isolation
 pip install $package_root_folder/pynvml-12.0.0-py3-none-any.whl --no-index --no-build-isolation
+pip install $package_root_folder/filelock-3.18.0-py3-none-any.whl --no-index --no-build-isolation
 
 # Next steps:
 # You're gonna wanna actually install RoMA, probably with the following command
