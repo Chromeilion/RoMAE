@@ -2,6 +2,7 @@ from typing import Optional
 import random
 import json
 from pathlib import Path
+import warnings
 
 import torch
 import torch.nn as nn
@@ -78,7 +79,13 @@ class CosineLRScheduleWithWarmup(torch.optim.lr_scheduler.LRScheduler):
 
     def get_lr(self) -> list[float]:
         """Compute learning rate using chainable form of the scheduler."""
-        torch.optim.lr_scheduler._warn_get_lr_called_within_step(self)
+        if not self._get_lr_called_within_step:
+            warnings.warn(
+                "To get the last learning rate computed by the scheduler, "
+                "please use `get_last_lr()`.",
+                UserWarning,
+                stacklevel=2,
+            )
         if self._step_count < self.total_warmup_iters:
             return self.get_lr_warmup()
         return self.get_lr_cosine()
