@@ -21,8 +21,6 @@ pip install $package_root_folder/psutil-release --no-index --no-build-isolation
 pip install $package_root_folder/accelerate --no-index --no-build-isolation
 pip install $package_root_folder/flit_core-3.12.0-py3-none-any.whl --no-index --no-build-isolation
 pip install $package_root_folder/click --no-index --no-build-isolation
-#cd $package_root_folder/packaging
-#pip install .
 pip install $package_root_folder/python-pathspec --no-index --no-build-isolation
 pip install $package_root_folder/trove-classifiers --no-index --no-build-isolation
 pip install $package_root_folder/hatch/backend --no-index --no-build-isolation
@@ -43,6 +41,7 @@ pip install $package_root_folder/pydantic_settings-2.8.1-py3-none-any.whl --no-i
 pip install $package_root_folder/nvidia_ml_py-12.570.86-py3-none-any.whl --no-index --no-build-isolation
 pip install $package_root_folder/pynvml-12.0.0-py3-none-any.whl --no-index --no-build-isolation
 pip install $package_root_folder/filelock-3.18.0-py3-none-any.whl --no-index --no-build-isolation
+pip install $package_root_folder/triton-3.3.0-cp311-cp311-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl --no-index --no-build-isolation
 
 # Next steps:
 # You're gonna wanna actually install RoMA, probably with the following command
