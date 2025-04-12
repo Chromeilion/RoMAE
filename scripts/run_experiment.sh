@@ -16,6 +16,8 @@
 # Environment variables that must be set:
 # VIRTUALENV_LOC : The location of the virtual environment with all dependencies
 # EXPERIMENT_NAME : Name of the experiment python package being run
+#
+# Any arguments passed to this script will be forwarded to the experiment
 # --------------------------------------------------------------------
 # Load .env file
 set -a; source .env; set +a
