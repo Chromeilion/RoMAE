@@ -242,7 +242,7 @@ class Trainer:
                 self.evaluate(accelerator, model, loss, test_dataloader, optim,
                               step_counter)
                 self.save_checkpoint(accelerator, step_counter, model_config)
-                self.post_train_hook(model, self.run)
+                self.post_train_hook(model, self.run, accelerator.device)
                 model.train()
             self.run.finish()
         accelerator.end_training()
