@@ -186,7 +186,7 @@ def load_from_checkpoint(checkpoint_dir, model_cls, model_config):
     return model
 
 
-def gen_mask(mask_ratio: float, pad_mask: torch.Tensor) -> torch.Tensor:
+def gen_mask(mask_ratio: float, pad_mask: torch.Tensor, single: bool = False) -> torch.Tensor:
     """
     Generate a mask for use when pre-training. True represents values
     that are masked. Currently, this function is not very well optimized.
@@ -216,8 +216,10 @@ def gen_mask(mask_ratio: float, pad_mask: torch.Tensor) -> torch.Tensor:
         idxs = random.sample(range(per_sample_n[i].item()), n_masked_per_sample[i].item())
         for j in idxs:
             mask[i, j] = True
-
-    max_masked = n_masked_per_sample.max()
+    if single:
+        max_masked = torch.tensor(pad_mask.shape[1] * ratio).ceil().int()
+    else:
+        max_masked = n_masked_per_sample.max()
     diff_from_max = (n_masked_per_sample - max_masked)
     for i in range(diff_from_max.shape[0]):
         for j in range(pad_mask.shape[1] + diff_from_max[i], pad_mask.shape[1]):
