@@ -95,11 +95,6 @@ class RoMAForPreTrainingConfig(RoMABaseConfig):
         env_nested_delimiter='__'
     )
     decoder_config: EncoderConfig = Field(EncoderConfig())
-    mask_ratio: float = Field(
-        .5,
-        description="Percentage of tokens to mask out, the optimal value for "
-                    "this will be different depending on the dataset used."
-    )
     normalize_targets: bool = Field(
         False,
         description="Whether to normalize the target tubelet values."
