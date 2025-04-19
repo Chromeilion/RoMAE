@@ -30,7 +30,7 @@ if [[ -z "${EXPERIMENT_NAME}" ]]; then
   exit
 fi
 
-module load bsc/1.0 mkl/2024.0 intel impi hdf5/1.14.1-2-gcc anaconda/2023.07 nvidia-hpc-sdk/23.11-cuda11.8 openblas/0.3.27-gcc cudnn/9.0.0-cuda11 tensorrt/10.0.0-cuda11 impi/2021.11 gcc/11.4.0 nccl/2.19.4 cuda/11.8
+module load cuda/12.6 mkl/2024.0 intel nvidia-hpc-sdk/25.1 hdf5/1.14.4.2-nvidia-nvhpcx cudnn/9.6.0-cuda12 tensorrt/10.0.0-cuda12 gcc/13.2.0-nvidia-hpc-sdk
 
 # Load the virtual environment
 # shellcheck source=.env

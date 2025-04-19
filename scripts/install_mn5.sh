@@ -8,7 +8,7 @@
 package_root_folder=/gpfs/projects/ehpc10/rmae/uzivanov/software_m
 PREFIX_DIR=/gpfs/projects/ehpc10/rmae/uzivanov/python_prefix
 
-module load cuda/12.6 mkl/2024.0 intel nvidia-hpc-sdk/23.11 hdf5/1.14.4.2-nvidia-nvhpcx cudnn/9.6.0-cuda12 tensorrt/10.0.0-cuda12
+module load cuda/12.6 mkl/2024.0 intel nvidia-hpc-sdk/25.1 hdf5/1.14.4.2-nvidia-nvhpcx cudnn/9.6.0-cuda12 tensorrt/10.0.0-cuda12 gcc/13.2.0-nvidia-hpc-sdk
 
 export PYTHON_BIN="$PREFIX_DIR/bin/python3"
 
