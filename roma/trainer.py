@@ -173,8 +173,7 @@ class Trainer:
         Path(self.config.checkpoint_dir).mkdir(exist_ok=True, parents=True)
         self.set_seeds()
         accelerator = Accelerator(
-            project_dir=self.config.checkpoint_dir,
-            step_scheduler_with_optimizer=False
+            project_dir=self.config.checkpoint_dir
         )
         self.init_wandb(accelerator=accelerator, model=model)
         train_dataloader, test_dataloader = self.get_dataloaders(
@@ -190,7 +189,7 @@ class Trainer:
         )
         scheduler = self.get_lr_scheduler(
             optimizer=optim,
-            warmup_steps=self.config.warmup_steps,
+            warmup_steps=self.config.warmup_steps * accelerator.num_processes,
             total_steps=len(train_dataloader) * self.config.epochs
         )
         model_config = model.config # Used when saving the model
