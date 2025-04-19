@@ -14,7 +14,7 @@ from roma.positional_embeddings import (
     AbsoluteSinCosine,
     DummyPosEmbedding,
 )
-from roma.utils import get_drop_path, patchify, load_from_checkpoint
+from roma.utils import get_drop_path, patchify, load_from_checkpoint, get_encoder_size
 
 """
 RoMA architecture implementation.
@@ -94,7 +94,7 @@ class RoMAForPreTrainingConfig(RoMABaseConfig):
         extra="ignore",
         env_nested_delimiter='__'
     )
-    decoder_config: EncoderConfig = Field(EncoderConfig())
+    decoder_config: EncoderConfig = Field(EncoderConfig(**get_encoder_size("RoMA-tiny-shallow")))
     normalize_targets: bool = Field(
         False,
         description="Whether to normalize the target tubelet values."
@@ -514,6 +514,9 @@ class RoMAForClassification(RoMABase):
             pos_encoding=p_model.config.pos_encoding,
             tubelet_size=p_model.config.tubelet_size,
             n_channels=p_model.config.n_channels,
+            p_rope_val=p_model.config.p_rope_val,
+            n_pos_dims=p_model.config.n_pos_dims,
+            use_cls=p_model.config.use_cls,
             max_len=p_model.config.max_len,
             **kwargs
         )
@@ -540,7 +543,7 @@ class RoMAForClassification(RoMABase):
         self.attn_pos_embedding.reset_cache()
 
     def forward(self, values: torch.Tensor, positions: torch.Tensor,
-                pad_mask=None, label=None) -> tuple[torch.Tensor, torch.Tensor]:
+                pad_mask=None, label=None, *_, **__) -> tuple[torch.Tensor, torch.Tensor]:
         x = patchify(self.config.tubelet_size, values)
         x = self.projection(x)
         x, positions, pad_mask = self.add_cls(x, positions, pad_mask)
