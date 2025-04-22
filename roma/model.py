@@ -252,7 +252,7 @@ class RoMABase(nn.Module):
         """Load model weights from a directory.
         """
         state_dict = load_file(Path(checkpoint_dir)/"model.safetensors")
-        self.load_state_dict(state_dict)
+        self.load_state_dict(state_dict, strict=False)
 
     def get_loss(self, logits: torch.Tensor,  label: torch.Tensor) -> torch.Tensor:
         """Call the loss function if the label is not None
@@ -292,7 +292,7 @@ class RoMAForPreTraining(RoMABase):
         self.set_head(
             InterpolationHead(
                 d_model=config.decoder_config.d_model,
-                d_output=math.prod(config.tubelet_size),
+                d_output=math.prod(config.tubelet_size)*config.n_channels,
                 layer_norm_eps=config.decoder_config.layer_norm_eps,
                 head_drop_rate=config.head_drop_rate
         ))
