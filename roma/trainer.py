@@ -205,7 +205,7 @@ class Trainer:
                 checkpoint, accelerator, train_dataloader
             )
         model.train()
-
+        loss = None
         with tqdm.tqdm(total=len(train_dataloader)*self.config.epochs,
                        desc="Training", initial=step_counter) as pbar:
             for epoch in range(current_epoch, self.config.epochs):
@@ -263,14 +263,16 @@ class Trainer:
         self.evaluate_callback = callback
 
     def evaluate(self, accelerator, model, loss_train, test_dataloader, optim, step):
+        if loss_train is None:
+            return
         grads = [
             param.grad.detach().flatten()
             for param in model.parameters()
             if param.grad is not None
         ]
         norm = torch.cat(grads).norm()
-        self.run.log({"train/lr": optim.param_groups[0]["lr"]}, step=step)
         self.run.log({"train/gradient_norm": norm}, step=step)
+        self.run.log({"train/lr": optim.param_groups[0]["lr"]}, step=step)
         if loss_train is not None:
             self.run.log({"loss/train": loss_train.item()}, step=step)
             print(f"Train loss: {loss_train.item()}\n")
