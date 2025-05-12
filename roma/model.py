@@ -358,7 +358,7 @@ class RoMAForPreTraining(RoMABase):
         mask_tokens = self.mask_token.expand(b, m_x.shape[1], -1)
 
         # Apply input positional encodings to our MASK tokens.
-        mask_tokens = self.encoder_inpt_pos_embedding(mask_tokens, m_positions)
+        mask_tokens = self.inpt_pos_dropout(self.decoder_inpt_pos_embedding(mask_tokens, m_positions))
 
         # Append MASK token and positional information
         x = torch.cat([x, mask_tokens], dim=1)
