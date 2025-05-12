@@ -47,13 +47,7 @@ class AbsoluteSinCosine(nn.Module, BasePosEmbedding):
             x: Tensor, shape ``[seq_len, batch_size, embedding_dim]``
             idxs: Tensor, shape ``[batch_size, seq_len]``
         """
-        B = x.shape[0]
-        # Dumb way of doing this but it works and we only need to do it
-        # once.
-        t = idxs[0]
-        t = t[..., None] + idxs[1][:, None, :]
-        t = t[..., None] + idxs[2][:, None, None, :]
-        x = x + self.pe[t.view(B, -1)]
+        x = x + self.pe[:x.shape[1]]
         return x
 
 
