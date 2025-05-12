@@ -47,7 +47,9 @@ class AbsoluteSinCosine(nn.Module, BasePosEmbedding):
             x: Tensor, shape ``[seq_len, batch_size, embedding_dim]``
             idxs: Tensor, shape ``[batch_size, seq_len]``
         """
-        idxs = torch.round(idxs).long().flatten(end_dim=1)
+        # Currently ONLY works with images size 224*224 and patch size 16x16
+        idxs = torch.round(idxs).long()
+        idxs = idxs[:, 1] * 14 + idxs[:, 0]
         x = x + self.pe[idxs]
         return x
 
