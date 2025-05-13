@@ -18,14 +18,16 @@ from roma.utils import get_drop_path, patchify, load_from_checkpoint, get_encode
 
 """
 RoMA architecture implementation.
-The Transformer implementation is a modified version of the one provided by 
+Originally based on the Llama code. Has been converted into an Encoder,
+greatly simplified, and dropout/stochastic depth has been added amongst 
+other things.
 Llama:
 https://github.com/meta-llama/llama
 https://arxiv.org/abs/2302.13971
 
 Some pieces are based on the implementation of the original MAE:
 https://github.com/facebookresearch/mae
-https//arxiv.org/abs/2111.06377 
+https//arxiv.org/abs/2111.06377
 """
 
 class EncoderConfig(BaseModel):
@@ -462,7 +464,6 @@ class RoMAForPreTraining(RoMABase):
 
         self.reset_pos_cache()
         return logits
-
 
 
 class RoMAForClassification(RoMABase):

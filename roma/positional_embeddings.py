@@ -56,7 +56,8 @@ class AbsoluteSinCosine(nn.Module, BasePosEmbedding):
 
 class NDPRope(nn.Module,  BasePosEmbedding):
     """
-    N-dimensional continuous p-RoPE, based on the paper:
+    N-dimensional continuous p-RoPE. The initial p-RoPE code was converted from
+    the JAX implementation here:
     "Round and Round We Go! What Makes Rotary Positional Encodings Useful?"
     https://openreview.net/forum?id=GtvuNrk58a
     """
