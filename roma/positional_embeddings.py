@@ -41,17 +41,13 @@ class AbsoluteSinCosine(nn.Module, BasePosEmbedding):
         pe[:, 1::2] = torch.cos(position * div_term)
         self.register_buffer('pe', pe)
 
-    def forward(self, x: torch.Tensor, idxs: POSITIONS) -> torch.Tensor:
+    def forward(self, x: torch.Tensor, mask: torch.tensor) -> torch.Tensor:
         """
         Arguments:
             x: Tensor, shape ``[seq_len, batch_size, embedding_dim]``
-            idxs: Tensor, shape ``[batch_size, seq_len]``
+            mask: Tensor, shape ``[batch_size, seq_len]``
         """
-        # Currently ONLY works with images size 224*224 and patch size 16x16
-        idxs = torch.round(idxs).long()
-        idxs = idxs[:, 1] * 14 + idxs[:, 0]
-        x = x + self.pe[idxs]
-        return x
+        return x + self.pe[None, :mask.shape[1], :].expand(x.shape[0], -1, -1)[mask].reshape(x.shape[0], x.shape[1], -1)
 
 
 class NDPRope(nn.Module,  BasePosEmbedding):

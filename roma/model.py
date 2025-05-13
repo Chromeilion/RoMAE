@@ -343,7 +343,7 @@ class RoMAForPreTraining(RoMABase):
         # Add classification token to the beginning of all relevant tensors
         x, positions, pad_mask = self.add_cls(x, positions, pad_mask)
 
-        x = self.inpt_pos_dropout(self.encoder_inpt_pos_embedding(x, positions))
+        x = self.inpt_pos_dropout(self.encoder_inpt_pos_embedding(x, ~mask))
 
         attn_mask = _get_attn_mask(x.shape, x.device, pad_mask)
 
@@ -360,7 +360,9 @@ class RoMAForPreTraining(RoMABase):
         mask_tokens = self.mask_token.expand(b, m_x.shape[1], -1)
 
         # Apply input positional encodings to our MASK tokens.
-        mask_tokens = self.inpt_pos_dropout(self.decoder_inpt_pos_embedding(mask_tokens, m_positions))
+        mask_tokens = self.inpt_pos_dropout(
+            self.decoder_inpt_pos_embedding(mask_tokens, mask)
+        )
 
         # Append MASK token and positional information
         x = torch.cat([x, mask_tokens], dim=1)
