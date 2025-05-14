@@ -47,6 +47,10 @@ class AbsoluteSinCosine(nn.Module, BasePosEmbedding):
             x: Tensor, shape ``[seq_len, batch_size, embedding_dim]``
             mask: Tensor, shape ``[batch_size, seq_len]``
         """
+        if mask[0].sum() != x.shape[1]:
+            mask = torch.cat([torch.ones(x.shape[0], 1, device=mask.device, dtype=torch.bool), mask], dim=1)
+            x + self.pe[None, :mask.shape[1], :].expand(x.shape[0], -1, -1)[
+                mask].reshape(x.shape[0], x.shape[1], -1)
         return x + self.pe[None, :mask.shape[1], :].expand(x.shape[0], -1, -1)[mask].reshape(x.shape[0], x.shape[1], -1)
 
 
