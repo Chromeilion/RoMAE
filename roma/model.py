@@ -551,7 +551,7 @@ class RoMAForClassification(RoMABase):
         x = self.projection(x)
         x, positions, pad_mask = self.add_cls(x, positions, pad_mask)
         attn_mask = _get_attn_mask(x.shape, x.device, pad_mask)
-        x = self.inpt_pos_embedding(x, positions)
+        x = self.inpt_pos_embedding(x)
         x = self.encoder(
             x,
             positions=positions,

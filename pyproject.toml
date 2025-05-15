@@ -18,7 +18,8 @@ dependencies = [
     "pydantic-settings",
     "accelerate",
     "safetensors",
-    "pynvml"
+    "pynvml",
+    "einops"
 ]
 
 [project.urls]

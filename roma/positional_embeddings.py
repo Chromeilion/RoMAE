@@ -1,6 +1,5 @@
 from abc import ABC
 import math
-from typing import Optional
 
 import torch
 import torch.nn as nn
@@ -41,12 +40,14 @@ class AbsoluteSinCosine(nn.Module, BasePosEmbedding):
         pe[:, 1::2] = torch.cos(position * div_term)
         self.register_buffer('pe', pe)
 
-    def forward(self, x: torch.Tensor, mask: torch.tensor) -> torch.Tensor:
+    def forward(self, x: torch.Tensor, mask: torch.tensor = None) -> torch.Tensor:
         """
         Arguments:
             x: Tensor, shape ``[seq_len, batch_size, embedding_dim]``
             mask: Tensor, shape ``[batch_size, seq_len]``
         """
+        if mask is None:
+            return x + self.pe[None, :x.shape[1]].expand(x.shape[0], -1, -1)
         if mask[0].sum() != x.shape[1]:
             mask = torch.cat([torch.ones(x.shape[0], 1, device=mask.device, dtype=torch.bool), mask], dim=1)
             x + self.pe[None, :mask.shape[1], :].expand(x.shape[0], -1, -1)[

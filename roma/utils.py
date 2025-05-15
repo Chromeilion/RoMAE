@@ -4,6 +4,7 @@ import json
 from pathlib import Path
 import warnings
 
+from einops import rearrange
 import torch
 import torch.nn as nn
 import math
@@ -17,14 +18,9 @@ def patchify(tubelet_size: tuple[int, int, int], x):
     E.g. a regular video could be (1, 32, 3, 244, 244).
     Converts the input into a sequence of tubelets.
     """
-    b, t, c, h, w = x.shape
-
-    t_p = t // tubelet_size[0]
-    h_p = h // tubelet_size[1]
-    w_p = w // tubelet_size[2]
-    n = t_p * h_p * w_p
-    x = x.reshape(b, t_p, h_p, w_p, *tubelet_size, c)
-    return x.reshape(b, n, -1)
+    return rearrange(x,
+              'b (t p1) c (h p2) (w p3) -> b (t h w) (p1 p2 p3 c)',
+              p1=tubelet_size[0], p2=tubelet_size[1], p3=tubelet_size[2])
 
 
 class CosineLRScheduleWithWarmup(torch.optim.lr_scheduler.LRScheduler):

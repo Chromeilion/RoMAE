@@ -75,7 +75,9 @@ export LAUNCHER="accelerate launch \
     --num_cpu_threads_per_process $CPUS_PER_PROCESS \
     --module \
     --rdzv_backend c10d \
-    --mixed_precision no \
+    --dynamo_mode default \
+    --mixed_precision fp16 \
+    --dynamo_backend inductor \
     "
 
 export CMD="$LAUNCHER $EXPERIMENT_NAME $ARGS"
