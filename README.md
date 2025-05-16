@@ -14,9 +14,7 @@ Each configuration has its own environment prefix, making it possible to
 store everything in a single .env file. The universal prefix is ```ROMA_```. 
 Prefixes for the Trainer, RoMAForClassification, and RoMAForPreTraining are 
 ```TRAINER_```,```CLASSIFIER_```, ```PRETRAIN_``` respectively. To see all the 
-settings that can be changed, have a look at the top quarter of 
-[model.py](https://github.com/Chromeilion/RoMA/blob/main/roma/model.py).
-
+settings that can be changed, have a look at the top quarter of model.py.
 In order to set the base learning rate to 0.5 in the Trainer and the mask 
 ratio to 0.7 in RoMAForPreTraining, one can put the following in a .env file:
 
