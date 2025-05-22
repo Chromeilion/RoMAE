@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "RoMAE"
 version = "0.1.0-alpha"
-description = "Rotary Masked Autoencoder. For use with multi-dimensional sparse data and irregular timeseries."
+description = "Rotary Masked Autoencoder. For use with multi-dimensional sparse data, irregular timeseries, and more!."
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
@@ -20,4 +20,4 @@ dependencies = [
 ]
 
 [tool.setuptools.packages.find]
-include = ["roma"]
+include = ["romae"]
