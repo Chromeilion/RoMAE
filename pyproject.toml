@@ -3,14 +3,11 @@ requires = ["setuptools", "setuptools-scm"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "RoMA"
+name = "RoMAE"
 version = "0.1.0-alpha"
-description = "Rotary Masked Autoencoder. For use with multi-dimensional sparse data and irregular timeseries."
+description = "Rotary Masked Autoencoder. For use with multi-dimensional sparse data, irregular timeseries, and more!."
 readme = "README.md"
 requires-python = ">=3.11"
-authors = [
-    {name = "Uros Zivanovic", email = "uros.zivanovic@studenti.units.it"}
-]
 dependencies = [
     "torch",
     "numpy",
@@ -22,8 +19,5 @@ dependencies = [
     "einops"
 ]
 
-[project.urls]
-Repository = "https://github.com/Chromeilion/RoMA"
-
 [tool.setuptools.packages.find]
-include = ["roma"]
+include = ["romae"]

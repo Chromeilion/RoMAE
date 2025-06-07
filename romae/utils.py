@@ -281,31 +281,31 @@ def get_encoder_size(size: str):
     Get the parameters of a specific RoMA model encoder size.
     """
     match size:
-        case "RoMA-tiny-shallow":
+        case "RoMAE-tiny-shallow":
             return {
                 "d_model": 180,
                 "nhead": 3,
                 "depth": 2
             }
-        case "RoMA-tiny":
+        case "RoMAE-tiny":
             return {
                 "d_model": 180,
                 "nhead": 3,
                 "depth": 12
             }
-        case "RoMA-small":
+        case "RoMAE-small":
             return {
                 "d_model": 432,
                 "nhead": 6,
                 "depth": 12
             }
-        case "RoMA-base":
+        case "RoMAE-base":
             return {
                 "d_model": 720,
                 "nhead": 12,
                 "depth": 12
             }
-        case "RoMA-large":
+        case "RoMAE-large":
             return {
                 "d_model": 960,
                 "nhead": 16,

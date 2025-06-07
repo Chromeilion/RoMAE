@@ -9,15 +9,15 @@ from safetensors.torch import load_file
 from pydantic import Field, BaseModel
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
-from roma.positional_embeddings import (
+from romae.positional_embeddings import (
     NDPRope,
     AbsoluteSinCosine,
     DummyPosEmbedding,
 )
-from roma.utils import get_drop_path, patchify, load_from_checkpoint, get_encoder_size
+from romae.utils import get_drop_path, patchify, load_from_checkpoint, get_encoder_size
 
 """
-RoMA architecture implementation.
+RoMAE architecture implementation.
 Originally based on the Llama code. Has been converted into an Encoder,
 greatly simplified, and dropout/stochastic depth has been added amongst 
 other things.
@@ -32,7 +32,7 @@ https//arxiv.org/abs/2111.06377
 
 class EncoderConfig(BaseModel):
     """
-    RoMA Encoder configuration values.
+    RoMAE Encoder configuration values.
     """
     d_model: int = Field(342)
     nhead: int = Field(8)
@@ -51,10 +51,10 @@ class EncoderConfig(BaseModel):
     pos_drop_rate: float = Field(0.)
 
 
-class RoMABaseConfig(BaseSettings):
+class RoMAEBaseConfig(BaseSettings):
     """
-    RoMA base configuration, shared by RoMAForClassification and
-    RoMAForInterpolation.
+    RoMAE base configuration, shared by RoMAEForClassification and
+    RoMAEForInterpolation.
     """
     encoder_config: EncoderConfig = Field(EncoderConfig())
     use_cls: bool = Field(
@@ -73,12 +73,12 @@ class RoMABaseConfig(BaseSettings):
     p_rope_val: float = Field(0.75)
 
 
-class RoMAForClassificationConfig(RoMABaseConfig):
+class RoMAEForClassificationConfig(RoMAEBaseConfig):
     """
-    Configuration parameters for RoMAForClassification.
+    Configuration parameters for RoMAEForClassification.
     """
     model_config = SettingsConfigDict(
-        env_prefix='ROMA_CLASSIFIER_',
+        env_prefix='ROMAE_CLASSIFIER_',
         env_file='.env',
         extra="ignore",
         env_nested_delimiter='__'
@@ -86,17 +86,17 @@ class RoMAForClassificationConfig(RoMABaseConfig):
     dim_output: Optional[int]
 
 
-class RoMAForPreTrainingConfig(RoMABaseConfig):
+class RoMAEForPreTrainingConfig(RoMAEBaseConfig):
     """
-    Configuration parameters for the RoMAForPretraining model.
+    Configuration parameters for the RoMAEForPretraining model.
     """
     model_config = SettingsConfigDict(
-        env_prefix='ROMA_PRETRAIN_',
+        env_prefix='ROMAE_PRETRAIN_',
         env_file='.env',
         extra="ignore",
         env_nested_delimiter='__'
     )
-    decoder_config: EncoderConfig = Field(EncoderConfig(**get_encoder_size("RoMA-tiny-shallow")))
+    decoder_config: EncoderConfig = Field(EncoderConfig(**get_encoder_size("RoMAE-tiny-shallow")))
     normalize_targets: bool = Field(
         False,
         description="Whether to normalize the target tubelet values."
@@ -173,12 +173,12 @@ def _get_attn_mask(x_shape: tuple[int, ...], device,
     return attn_mask
 
 
-class RoMABase(nn.Module):
+class RoMAEBase(nn.Module):
     """
-    Base RoMA model class. Contains common layers shared between all RoMA
+    Base RoMAE model class. Contains common layers shared between all RoMAE
     models.
     """
-    def __init__(self, config: RoMABaseConfig, *args, **kwargs):
+    def __init__(self, config: RoMAEBaseConfig, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.loss_fn: Optional[Callable[[torch.Tensor, torch.Tensor], torch.Tensor]]
         self.loss_fn = None
@@ -217,7 +217,7 @@ class RoMABase(nn.Module):
         loss = self.get_loss(logits, label)
         return logits, loss
 
-    def get_pos_embs(self, config: RoMABaseConfig, nhead: int, d_model: int) -> tuple[nn.Module, nn.Module]:
+    def get_pos_embs(self, config: RoMAEBaseConfig, nhead: int, d_model: int) -> tuple[nn.Module, nn.Module]:
         """Load positional embeddings based on the provided config and add
         dropout to them.
         """
@@ -274,10 +274,10 @@ class RoMABase(nn.Module):
         return x, positions, pad_mask
 
 
-class RoMAForPreTraining(RoMABase):
-    def __init__(self, config: RoMAForPreTrainingConfig, *args, **kwargs):
+class RoMAEForPreTraining(RoMAEBase):
+    def __init__(self, config: RoMAEForPreTrainingConfig, *args, **kwargs):
         super().__init__(config,  *args, **kwargs)
-        self.config: RoMAForPreTrainingConfig = config
+        self.config: RoMAEForPreTrainingConfig = config
         self.decoder = Encoder(config.decoder_config)
         # Projection from encoder embedding dimension to decoder
         # embedding dimension
@@ -468,15 +468,15 @@ class RoMAForPreTraining(RoMABase):
         return logits
 
 
-class RoMAForClassification(RoMABase):
+class RoMAEForClassification(RoMAEBase):
     """
-    Basic RoMA Encoder model with an MLP head on top. Useful for regression and
+    Basic RoMAE Encoder model with an MLP head on top. Useful for regression and
     classification tasks. Usually you want to initialize this using pre-trained
-    weights from RoMAForPreTraining.
+    weights from RoMAEForPreTraining.
     """
-    def __init__(self, config: RoMAForClassificationConfig, *args, **kwargs):
+    def __init__(self, config: RoMAEForClassificationConfig, *args, **kwargs):
         super().__init__(config=config, *args, **kwargs)
-        self.config: RoMAForClassificationConfig = config
+        self.config: RoMAEForClassificationConfig = config
         if config.use_cls:
             self.set_head(
                 CLSClassifierHead(
@@ -509,11 +509,11 @@ class RoMAForClassification(RoMABase):
         overriding during fine-tuning.
         """
         p_model = load_from_checkpoint(
-            checkpoint, RoMAForPreTraining, RoMAForPreTrainingConfig
+            checkpoint, RoMAEForPreTraining, RoMAEForPreTrainingConfig
         )
         encoder_config = p_model.config.encoder_config
 
-        finetune_config = RoMAForClassificationConfig(
+        finetune_config = RoMAEForClassificationConfig(
             pos_encoding=p_model.config.pos_encoding,
             tubelet_size=p_model.config.tubelet_size,
             n_channels=p_model.config.n_channels,
@@ -528,7 +528,7 @@ class RoMAForClassification(RoMABase):
         for attr in encoder_attrs:
             setattr(finetune_config.encoder_config, attr, getattr(encoder_config, attr))
 
-        model = RoMAForClassification(config=finetune_config)
+        model = RoMAEForClassification(config=finetune_config)
         # Copy over all the encoder weights
         with torch.no_grad():
             p_model_state = p_model.state_dict()

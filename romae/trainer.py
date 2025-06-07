@@ -16,7 +16,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 from accelerate import Accelerator
 from accelerate.data_loader import skip_first_batches
 
-from roma.utils import CosineLRScheduleWithWarmup
+from romae.utils import CosineLRScheduleWithWarmup
 
 # Supress errors if torch compile is used on unsupported hardware
 torch._dynamo.config.suppress_errors = True
@@ -28,7 +28,7 @@ noop = lambda *_, **__: None
 
 class TrainerConfig(BaseSettings):
     model_config = SettingsConfigDict(
-        env_prefix='ROMA_TRAINER_',
+        env_prefix='ROMAE_TRAINER_',
         env_file='.env',
         extra="ignore"
     )
@@ -51,11 +51,11 @@ class TrainerConfig(BaseSettings):
         description="Name of the run. Defaults to the date"
     )
     project_name: str = Field(
-        "RoMA",
+        "RoMAE",
         description="Name of the project in WandB"
     )
-    entity_name: str = Field(
-        "rmae",
+    entity_name: Optional[str] = Field(
+        None,
         description="Name of the entity in WandB, should be the same as "
                     "the team you are on."
     )
