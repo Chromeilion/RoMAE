@@ -54,8 +54,8 @@ from romae.trainer import Trainer, TrainerConfig
 The RoMAE model accepts 4 inputs:
 
 - values: actual values going through the model (pixels, flux, etc.), must have 5 dimensions (batch, time, channel, height, width). If you're working in less dimensions just set the extra dims to size 1
-- positions: a 2D tensor of shape (n_positional_dims, n_tokens) which stores the 3D position of 
-  each token after it has been converted to tubelets
+- positions: a 2D tensor of shape (n_positional_dims, n_tokens) which stores the N-dimensional position of 
+  each token
 - pad_mask: optional padding mask which marks what values should be ignored 
   during attention
 - label: optional label which is used to calculate the loss
