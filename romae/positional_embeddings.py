@@ -71,6 +71,7 @@ class NDPRope(nn.Module,  BasePosEmbedding):
             raise AttributeError(f"Provided p value ({p}) is not between 0 and 1!")
 
         self.axis_dim = head_dim // n_dims
+        self.n_dims = n_dims
 
         rope_angles = int(p * self.axis_dim // 2)
         nope_angles = self.axis_dim // 2 - rope_angles
@@ -125,9 +126,16 @@ class NDPRope(nn.Module,  BasePosEmbedding):
         """
         B, seq_len, nhead, head_dim = x.shape
         # Collapse embeddings into the sequence dimension
-        x = x.permute([0, 2, 1, 3])
-        x = x.reshape(B, nhead, -1, self.axis_dim).permute([0, 2, 1, 3])
-        x = self.apply_ndprope(x, positions.reshape(B, -1))
+#        x = x.permute([0, 2, 1, 3])
+#        x = x.reshape(B, nhead, -1, self.axis_dim).permute([0, 2, 1, 3])
+        views = []
+        for i in range(self.n_dims):
+            views.append(self.apply_ndprope(
+                x[..., self.axis_dim*i:self.axis_dim*(i+1)],
+                positions[:, i].reshape(B, -1)
+            ))
+        x = torch.cat(views, dim=-1)
+
         x = x.permute([0, 2, 1, 3])
         x = x.reshape(B, nhead, seq_len, head_dim).permute([0, 2, 1, 3])
         return x
