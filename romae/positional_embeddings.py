@@ -126,8 +126,6 @@ class NDPRope(nn.Module,  BasePosEmbedding):
         """
         B, seq_len, nhead, head_dim = x.shape
         # Collapse embeddings into the sequence dimension
-#        x = x.permute([0, 2, 1, 3])
-#        x = x.reshape(B, nhead, -1, self.axis_dim).permute([0, 2, 1, 3])
         views = []
         for i in range(self.n_dims):
             views.append(self.apply_ndprope(
@@ -135,7 +133,4 @@ class NDPRope(nn.Module,  BasePosEmbedding):
                 positions[:, i].reshape(B, -1)
             ))
         x = torch.cat(views, dim=-1)
-
-        x = x.permute([0, 2, 1, 3])
-        x = x.reshape(B, nhead, seq_len, head_dim).permute([0, 2, 1, 3])
         return x
