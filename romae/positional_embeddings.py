@@ -84,18 +84,12 @@ class NDPRope(nn.Module,  BasePosEmbedding):
             value=torch.inf
         )))
 
-        self.prev_positions = None
         self.cache = None
 
     def reset_cache(self):
         self.cache = None
-        self.prev_positions = None
 
     def get_sin_cos(self, positions):
-        if self.prev_positions is not None:
-            if positions.shape == self.prev_positions.shape:
-                if torch.all(positions == self.prev_positions):
-                    return self.cache
         sinusoid_inp = (
                 positions[..., torch.newaxis] / self.timescale[torch.newaxis,
                                                 torch.newaxis, :]
@@ -104,12 +98,10 @@ class NDPRope(nn.Module,  BasePosEmbedding):
         sin = torch.sin(sinusoid_inp)
         cos = torch.cos(sinusoid_inp)
 
-        self.cache = (sin, cos)
-        self.prev_positions = positions
         return sin, cos
 
-    def apply_ndprope(self, x, positions):
-        sin, cos = self.get_sin_cos(positions)
+    def apply_ndprope(self, x, angles):
+        sin, cos = angles
         first_half, second_half = torch.tensor_split(x, 2, dim=-1)
         first_part = first_half * cos - second_half * sin
         second_part = second_half * cos + first_half * sin
@@ -125,12 +117,18 @@ class NDPRope(nn.Module,  BasePosEmbedding):
             For 3D position, this would be ```[batch_size, 3, seq_len]```.
         """
         B, seq_len, nhead, head_dim = x.shape
+
+        if self.cache is None:
+            self.cache = []
+            for i in range(self.n_dims):
+                self.cache.append(self.get_sin_cos(positions[:, i].reshape(B, -1)))
+
         # Collapse embeddings into the sequence dimension
         views = []
         for i in range(self.n_dims):
             views.append(self.apply_ndprope(
                 x[..., self.axis_dim*i:self.axis_dim*(i+1)],
-                positions[:, i].reshape(B, -1)
+                self.cache[i]
             ))
         x = torch.cat(views, dim=-1)
         return x
