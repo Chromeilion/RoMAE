@@ -210,10 +210,11 @@ class RoMAEBase(nn.Module):
         # A useful zero buffer
         self.register_buffer("zeros", torch.zeros(1))
 
-    def apply_head_loss(self, x, label: torch.Tensor | None):
+    def apply_head_loss(self, x, label: torch.Tensor | None,
+                        pad_mask: Optional[torch.Tensor] = None):
         """Apply head and calculate loss
         """
-        logits = self.head(x)
+        logits = self.head(x, pad_mask=pad_mask)
         loss = self.get_loss(logits, label)
         return logits, loss
 
@@ -563,7 +564,7 @@ class RoMAEForClassification(RoMAEBase):
             pos_encoding=self.attn_pos_embedding,
             attn_mask=attn_mask
         )
-        logits, loss = self.apply_head_loss(x, label)
+        logits, loss = self.apply_head_loss(x, label, pad_mask)
 
         self.reset_pos_cache()
         return logits, loss
@@ -581,7 +582,7 @@ class CLSClassifierHead(nn.Module):
             nn.Linear(d_model, d_output)
         )
 
-    def forward(self, x):
+    def forward(self, x, *_, **__):
         # Take out the CLS token which is at position zero
         x = x[:, 0, :]
         return self.head(x)
@@ -599,9 +600,15 @@ class MeanClassifierHead(nn.Module):
             nn.Linear(d_model, d_output)
         )
 
-    def forward(self, x):
-        # Get the mean
-        x = x.mean(dim=1)
+    def forward(self, x, pad_mask: Optional[torch.Tensor] = None, *_, **__):
+        B, N, E = x.shape
+        # We only calculate the mean across non-padding values.
+        if pad_mask is not None:
+            n_unmasked = (~pad_mask).sum(dim=1)
+            x[pad_mask] = 0
+            x = x.sum(dim=1) / n_unmasked[:, None]
+        else:
+            x = x.mean(dim=1)
         return self.head(x)
 
 
@@ -618,7 +625,7 @@ class InterpolationHead(nn.Module):
             nn.Linear(d_model, d_output)
         )
 
-    def forward(self, x):
+    def forward(self, x, *_, **__):
         return self.head(x)
 
 
