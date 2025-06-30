@@ -298,7 +298,7 @@ class RoMAEForPreTraining(RoMAEBase):
                 layer_norm_eps=config.decoder_config.layer_norm_eps,
                 head_drop_rate=config.head_drop_rate
         ))
-        self.set_loss_fn(nn.MSELoss())
+        self.set_loss_fn(nn.MSELoss(reduction='none'))
 
     def reset_pos_cache(self):
         self.encoder_inpt_pos_embedding.reset_cache()
@@ -329,6 +329,7 @@ class RoMAEForPreTraining(RoMAEBase):
         # Extract all the values that are being masked out
         m_x = x[mask].reshape(b, -1, x.shape[-1])
         m_positions = positions[mask[:, None, ].expand(-1, npd, -1)].reshape(b, npd, -1)
+        m_pad_mask = None
         if pad_mask is not None:
             m_pad_mask = pad_mask[mask].reshape(b, -1)
 
@@ -386,6 +387,10 @@ class RoMAEForPreTraining(RoMAEBase):
         logits, loss = None, None
         if m_x.shape[1] != 0:
             logits, loss = self.apply_head_loss(x, m_x)
+            if m_pad_mask is not None:
+                # Remove loss from padding:
+                loss[m_pad_mask] = 0
+            loss = loss.mean()
 
         # We reset the positional embedding caches to avoid
         # inter-loop dependencies in the Trainer, which break torch compile.
