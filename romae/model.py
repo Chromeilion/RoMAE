@@ -601,7 +601,6 @@ class MeanClassifierHead(nn.Module):
         )
 
     def forward(self, x, pad_mask: Optional[torch.Tensor] = None, *_, **__):
-        B, N, E = x.shape
         # We only calculate the mean across non-padding values.
         if pad_mask is not None:
             n_unmasked = (~pad_mask).sum(dim=1)
