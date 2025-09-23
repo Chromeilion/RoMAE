@@ -1,6 +1,6 @@
 #!/bin/bash
 #SBATCH --partition=boost_usr_prod
-#SBATCH --job-name=roma-train
+#SBATCH --job-name=romae-train
 #SBATCH --nodes=2
 #SBATCH --ntasks-per-node=1
 #SBATCH --cpus-per-task=32
@@ -11,7 +11,7 @@
 #SBATCH --exclusive
 
 # --------------------------------------------------------------------
-# A script for running RoMA experiments on the Leonardo compute cluster.
+# A script for running RoMAE experiments on the Leonardo compute cluster.
 #
 # Environment variables that must be set:
 # VIRTUALENV_LOC : The location of the virtual environment with all dependencies
@@ -72,7 +72,7 @@ export LAUNCHER="accelerate launch \
     --multi_gpu \
     --enable_cpu_affinity \
     --num_cpu_threads_per_process $CPUS_PER_PROCESS \
-    --mixed_precision no \
+    --mixed_precision bf16 \
     --module \
     --rdzv_backend c10d \
     --dynamo_mode default \
