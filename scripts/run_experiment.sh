@@ -50,8 +50,8 @@ CPUS_PER_PROCESS=8
 NNODES=$SLURM_NNODES
 NUM_PROCESSES=$(expr $NNODES \* $GPUS_PER_NODE)
 
-# Tell the RoMA how many CPU's each dataloader should spawn
-export ROMA_TRAINER_NUM_DATASET_WORKERS=$CPUS_PER_PROCESS
+# Tell the RoMAE how many CPU's each dataloader should spawn
+export ROMAE_TRAINER_NUM_DATASET_WORKERS=$CPUS_PER_PROCESS
 
 # Use the first node's hostname as the master node address
 MASTER_ADDR=$(scontrol show hostnames "$SLURM_JOB_NODELIST" | head -n 1)
@@ -59,7 +59,7 @@ MASTER_PORT=6000
 
 echo "Master address: $MASTER_ADDR"
 echo "Master port: $MASTER_PORT"
-echo "Machine rank: $SLURM_JOBID"
+echo "Machine rank: $SLURM_PROCID"
 echo "Num processes: $NUM_PROCESSES"
 echo "Num machines: $NNODES"
 
@@ -72,11 +72,11 @@ export LAUNCHER="accelerate launch \
     --multi_gpu \
     --enable_cpu_affinity \
     --num_cpu_threads_per_process $CPUS_PER_PROCESS \
-    --mixed_precision bf16 \
+    --mixed_precision no \
     --module \
     --rdzv_backend c10d \
     --dynamo_mode default \
-    --dynamo_backend inductor \
+    --dynamo_backend eager \
     --dynamo_use_dynamic \
     "
 
