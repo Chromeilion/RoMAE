@@ -9,7 +9,7 @@ import torch
 import torch.nn as nn
 import math
 
-POSITION_DTYPE = tuple[Optional[torch.Tensor], Optional[torch.Tensor], Optional[torch.Tensor]]
+POSITION_DTYPE = tuple[Optional[torch.Tensor], ...]
 
 
 def patchify(tubelet_size: tuple[int, int, int], x):
@@ -199,6 +199,7 @@ def gen_mask(mask_ratio: float, pad_mask: torch.Tensor, single: bool = False) ->
     pad_mask : torch.Tensor
         A boolean mask where positions in the input corresponding to
         padding have value True
+    single : bool, optional
     """
     if mask_ratio < 0 or mask_ratio > 1:
         raise ValueError(f"Mask ratio must be between 0 and 1, but was given "
@@ -223,7 +224,6 @@ def gen_mask(mask_ratio: float, pad_mask: torch.Tensor, single: bool = False) ->
 
     return mask
 
-# Credit timm and copyright 2020 Ross Wightman
 # Implementation of stochastic depth from this paper:
 # Deep Networks with Stochastic Depth (https://arxiv.org/abs/1603.09382)
 # Originally taken from here:
@@ -231,7 +231,7 @@ def gen_mask(mask_ratio: float, pad_mask: torch.Tensor, single: bool = False) ->
 def drop_path(x, drop_prob: float = 0., training: bool = False, scale_by_keep: bool = True):
     """Drop paths (Stochastic Depth) per sample (when applied in main path of residual blocks).
 
-    This is the same as the DropConnect impl I created for EfficientNet, etc networks, however,
+    This is the same as the DropConnect impl for EfficientNet, etc networks, however,
     the original name is misleading as 'Drop Connect' is a different form of dropout in a separate paper...
     See discussion: https://github.com/tensorflow/tpu/issues/494#issuecomment-532968956 ... I've opted for
     changing the layer and argument names to 'drop path' rather than mix DropConnect as a layer name and use
@@ -249,7 +249,8 @@ def drop_path(x, drop_prob: float = 0., training: bool = False, scale_by_keep: b
 
 
 class DropPath(nn.Module):
-    """Drop paths (Stochastic Depth) per sample  (when applied in main path of residual blocks).
+    """Drop paths (Stochastic Depth) per sample
+    (when applied in main path of residual blocks).
     """
     def __init__(self, drop_prob: float = 0., scale_by_keep: bool = True):
         super(DropPath, self).__init__()
@@ -277,8 +278,7 @@ def get_drop_path(drop_path_rate: float, layer_id: int, depth: int):
 
 
 def get_encoder_size(size: str):
-    """
-    Get the parameters of a specific RoMA model encoder size.
+    """Get the parameters of a specific RoMAE model encoder size.
     """
     match size:
         case "RoMAE-tiny-shallow":

@@ -1,4 +1,3 @@
-import math
 import os
 import random
 import json
@@ -92,8 +91,7 @@ class TrainerConfig(BaseSettings):
 
 
 class Trainer:
-    """
-    Trainer class. Similar to the Huggingface Trainer but simpler.
+    """Trainer class. Similar to the Huggingface Trainer but simpler.
     """
     def __init__(self, config: TrainerConfig):
         self.config: TrainerConfig = config
@@ -248,7 +246,7 @@ class Trainer:
 
     def set_post_train_hook(self, hook):
         """
-        Set a function te be run at the end of training. The function
+        Set a function to be run at the end of training. The function
         should accept the model as the first argument and the wandb run
         as the second.
         """

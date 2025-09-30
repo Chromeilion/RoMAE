@@ -40,7 +40,8 @@ class EncoderConfig(BaseModel):
     depth: int = Field(6)
     # To manually set the dimension of the MLP, change dim_feedforward.
     dim_feedforward: Optional[int] = Field(None)
-    # If dim_feedforward is None it's chosen by multiplying d_model by the mlp_ratio
+    # If dim_feedforward is None it's chosen by multiplying d_model by
+    # the mlp_ratio
     mlp_ratio: float = Field(4.)
     # Stochastic depth value
     drop_path_rate: float = Field(0.)
@@ -96,7 +97,9 @@ class RoMAEForPreTrainingConfig(RoMAEBaseConfig):
         extra="ignore",
         env_nested_delimiter='__'
     )
-    decoder_config: EncoderConfig = Field(EncoderConfig(**get_encoder_size("RoMAE-tiny-shallow")))
+    decoder_config: EncoderConfig = Field(
+        EncoderConfig(**get_encoder_size("RoMAE-tiny-shallow"))
+    )
     normalize_targets: bool = Field(
         False,
         description="Whether to normalize the target tubelet values."
@@ -106,12 +109,12 @@ class RoMAEForPreTrainingConfig(RoMAEBaseConfig):
     )
 
 
-def _get_inpt_pos_embedding(pos_encoding: str, d_model: int, max_len: int) -> nn.Module:
+def _get_inpt_pos_embedding(pos_encoding: str, d_model: int,
+                            max_len: int) -> nn.Module:
     """
     Parse the config and return the relevant positional encoding function to
-    be applied at the input.
-    Currently only supports the standard sin/cos absolute positional
-    encodings. But is useful if we want to add more.
+    be applied at the input. Currently only supports the standard sin/cos
+    absolute positional encodings, but is useful if we want to add more.
     """
     match pos_encoding:
         case "absolute":
@@ -127,8 +130,8 @@ def _get_attn_pos_embedding(pos_encoding: str, d_model: int, nhead: int, n_dims,
                             p: float) -> nn.Module:
     """
     Parse the config and return the relevant positional encoding function to
-    be applied at each attention block.
-    Currently only supports Continuous RopeND.
+    be applied at each attention block. Currently only supports Continuous
+    RopeND.
     """
     match pos_encoding:
         case "ropend":
@@ -195,7 +198,10 @@ class RoMAEBase(nn.Module):
                 config.tubelet_size[0] * config.tubelet_size[1] *
                 config.tubelet_size[2] * config.n_channels
         )
-        self.projection = nn.Linear(proj_input_dim, config.encoder_config.d_model)
+        self.projection = nn.Linear(
+            proj_input_dim,
+            config.encoder_config.d_model
+        )
 
         # Classification token
         if config.use_cls:
@@ -218,9 +224,9 @@ class RoMAEBase(nn.Module):
         loss = self.get_loss(logits, label)
         return logits, loss
 
-    def get_pos_embs(self, config: RoMAEBaseConfig, nhead: int, d_model: int) -> tuple[nn.Module, nn.Module]:
-        """Load positional embeddings based on the provided config and add
-        dropout to them.
+    def get_pos_embs(self, config: RoMAEBaseConfig, nhead: int, d_model: int
+                     ) -> tuple[nn.Module, nn.Module]:
+        """Load positional embeddings based on the provided config.
         """
         inpt_pos_embedding = _get_inpt_pos_embedding(
                 pos_encoding=config.pos_encoding,
@@ -345,7 +351,7 @@ class RoMAEForPreTraining(RoMAEBase):
         # Add classification token to the beginning of all relevant tensors
         x, positions, pad_mask = self.add_cls(x, positions, pad_mask)
 
-        x = self.inpt_pos_dropout(self.encoder_inpt_pos_embedding(x, ~mask))
+        x = self.inpt_pos_dropout(self.encoder_inpt_pos_embedding(x, positions, ~mask))
 
         attn_mask = _get_attn_mask(x.shape, x.device, pad_mask)
 
@@ -363,7 +369,7 @@ class RoMAEForPreTraining(RoMAEBase):
 
         # Apply input positional encodings to our MASK tokens.
         mask_tokens = self.inpt_pos_dropout(
-            self.decoder_inpt_pos_embedding(mask_tokens, mask)
+            self.decoder_inpt_pos_embedding(mask_tokens, m_positions, mask)
         )
 
         # Append MASK token and positional information
@@ -398,80 +404,6 @@ class RoMAEForPreTraining(RoMAEBase):
         self.reset_pos_cache()
 
         return logits, loss
-
-    def predict(self, values: torch.Tensor, positions: torch.Tensor,
-                pred_positions: torch.Tensor, pad_mask=None, pred_pad_mask=None) -> torch.Tensor:
-        """
-        Take a set of values and their positions and do predictions on a
-        different set of positions.
-
-        Parameters
-        ----------
-        values : torch.Tensor
-            Known sequence values
-        positions : torch.Tensor
-            Positions corresponding to the values
-        pred_positions : torch.Tensor
-            A set of positions to predict
-        pad_mask : torch.Tensor
-            A pad mask with true in positions that are padded
-        pred_pad_mask : torch.Tensor
-            Same as pad mask but for the pred_positions
-
-        Returns
-        -------
-        logits : torch.Tensor
-            Model output logits for the predicted tokens
-        """
-        b = values.shape[0]
-        # Convert input to a sequence of tubelets
-        x = patchify(self.config.tubelet_size, values)
-        # Project into embeddings
-        x = self.projection(x)
-        # Add classification token to the beginning of all relevant tensors
-        x, positions, pad_mask = self.add_cls(x, positions, pad_mask)
-        # Apply positional embeddings and dropout
-        x = self.inpt_pos_dropout(self.encoder_inpt_pos_embedding(x, positions))
-        attn_mask = _get_attn_mask(x.shape, x.device, pad_mask)
-        # Encoder forward pass
-        x = self.encoder(
-            x,
-            positions=positions,
-            pos_encoding=self.encoder_attn_pos_embedding,
-            attn_mask=attn_mask
-        )
-        # Project tokens from the encoder dimension to decoder dimension
-        x = self.encoder_decoder_proj(x)
-        # Create a sequence of mask tokens representing the values we want to
-        # predict
-        mask_tokens = self.mask_token.expand(b, pred_positions.shape[2], -1)
-        mask_tokens = self.encoder_inpt_pos_embedding(mask_tokens, pred_positions)
-
-        # Append MASK tokens to the original sequence
-        x = torch.cat([x, mask_tokens], dim=1)
-        positions = torch.cat([positions, pred_positions], dim=2)
-        if pad_mask is not None and pred_pad_mask is not None:
-            pad_mask = torch.cat([pad_mask, pred_pad_mask], dim=1)
-
-        # Get our new attention and padding masks
-        attn_mask = _get_attn_mask(x.shape, x.device, pad_mask)
-
-        # Decoder forward pass
-        x = self.decoder(
-            x,
-            positions=positions,
-            pos_encoding=self.decoder_attn_pos_embedding,
-            attn_mask=attn_mask
-        )
-        # Extract our predicted values
-        x = x[:, -pred_positions.shape[-1]:]
-
-        logits = None
-        if pred_positions.shape[1] != 0:
-            logits = self.head(x)
-
-        self.reset_pos_cache()
-        return logits
 
 
 class RoMAEForClassification(RoMAEBase):
@@ -557,7 +489,7 @@ class RoMAEForClassification(RoMAEBase):
         x = self.projection(x)
         x, positions, pad_mask = self.add_cls(x, positions, pad_mask)
         attn_mask = _get_attn_mask(x.shape, x.device, pad_mask)
-        x = self.inpt_pos_embedding(x)
+        x = self.inpt_pos_embedding(x, positions)
         x = self.encoder(
             x,
             positions=positions,
@@ -647,7 +579,8 @@ class Encoder(nn.Module):
 
 
 class Attention(nn.Module):
-    """Multi-head attention module."""
+    """Multi-head attention module.
+    """
 
     def __init__(self, config: EncoderConfig):
         """

@@ -83,7 +83,7 @@ pip install $package_root_folder/pynvml-12.0.0-py3-none-any.whl --no-index --no-
 pip install $package_root_folder/h5py-3.13.0-cp311-cp311-manylinux_2_17_x86_64.manylinux2014_x86_64.whl --no-index --no-build-isolation
 
 # Next steps:
-# You're gonna wanna actually install RoMA, probably with the following command
+# You're gonna wanna actually install RoMAE, probably with the following command
 # from the project directory:
 # pip install -e . --no-index --no-build-isolation
 

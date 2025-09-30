@@ -5,7 +5,7 @@ import torch
 import torch.nn as nn
 
 
-# The 3D position of all embeddings is represented as a tensor with 3 rows.
+# The ND position of all embeddings is represented as a tensor with N rows.
 POSITIONS = torch.Tensor
 
 
@@ -40,7 +40,7 @@ class AbsoluteSinCosine(nn.Module, BasePosEmbedding):
         pe[:, 1::2] = torch.cos(position * div_term)
         self.register_buffer('pe', pe)
 
-    def forward(self, x: torch.Tensor, mask: torch.tensor = None) -> torch.Tensor:
+    def forward(self, x: torch.Tensor, positions, mask: torch.tensor = None) -> torch.Tensor:
         """
         Arguments:
             x: Tensor, shape ``[seq_len, batch_size, embedding_dim]``
@@ -123,7 +123,6 @@ class NDPRope(nn.Module,  BasePosEmbedding):
             for i in range(self.n_dims):
                 self.cache.append(self.get_sin_cos(positions[:, i].reshape(B, -1)))
 
-        # Collapse embeddings into the sequence dimension
         views = []
         for i in range(self.n_dims):
             views.append(self.apply_ndprope(

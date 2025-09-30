@@ -10,7 +10,7 @@
 #SBATCH --exclusive
 
 # --------------------------------------------------------------------
-# A script for running RoMA experiments on the MareNostrum 5 compute cluster.
+# A script for running RoMAE experiments on the Orfeo compute cluster.
 #
 # Environment variables that must be set:
 # VIRTUALENV_LOC : The location of the virtual environment with all dependencies

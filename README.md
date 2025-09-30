@@ -1,29 +1,43 @@
 # Rotary Masked Autoencoder
 
-General purpose implementation of the RoMAE model.
-This package is intended to make using RoMAE as easy as possible by providing 
-configuration and training utilities for the model which function on one or 
-more GPU's and even machines.
+Welcome to the implementation of the [RoMAE](https://arxiv.org/abs/2505.20535) 
+model. This package is intended to make using RoMAE as easy as possible 
+by providing the implementation of the model, configuration, and 
+training utilities. To get started, install the package using pip from 
+the repository root:
+
+```bash
+pip install .
+```
+
+We provide two model classes; ```romae.model.RoMAEForClassification``` 
+and ```romae.model.RoMAEForPreTraining```. The provided trainer class 
+```romae.trainer.Trainer``` can be used on both. If you're only 
+interested in our transformer encoder implementation, feel free to use
+```romae.model.Encoder```.
+Our n-dimensional p-RoPE implementation can also be found in 
+```romae.positional_embeddings.NDPRope```.
 
 ## Configuration Guide
 
 All configuration for the classes is stored in PydanticSettings objects.
-Because of this, all configuration can easily be set from a .env file as 
+Because of this, configuration can easily be set from a .env file as 
 well as from within your code.
 Each configuration has its own environment prefix, making it possible to
 store everything in a single .env file. The universal prefix is ```ROMAE_```. 
 Prefixes for the Trainer, RoMAEForClassification, and RoMAEForPreTraining are 
 ```TRAINER_```,```CLASSIFIER_```, ```PRETRAIN_``` respectively. To see all the 
 settings that can be changed, have a look at the top quarter of ```model.py```.
-E.g., in order to set the base learning rate to 0.5 in the Trainer and the mask 
-ratio to 0.7 in RoMAEForPreTraining, one can put the following in a .env file:
+As an example, in order to set the base learning rate to 0.5 in the 
+Trainer and the mask ratio to 0.7 in RoMAEForPreTraining, one can put 
+the following in a .env file:
 
 ```bash
 ROMAE_TRAINER_BASE_LR=0.5
 ROMAE_PRETRAIN_MASK_RATIO=0.7
 ```
 
-When setting 'submodel' attributes from an envioonment variable, two underscores 
+When setting 'submodel' attributes from an environment variable, two underscores 
 are required. Because the Transformer Encoder configuration is a submodel, 
 it therefore follows this rule. For example, to set the number of layers to 3,
 embedding dimension to 342, number of heads to 8, and the stochastic depth rate 
@@ -53,9 +67,11 @@ from romae.trainer import Trainer, TrainerConfig
 
 The RoMAE model accepts 4 inputs:
 
-- values: actual values going through the model (pixels, flux, etc.), must have 5 dimensions (batch, time, channel, height, width). If you're working in less dimensions just set the extra dims to size 1
-- positions: a 2D tensor of shape (n_positional_dims, n_tokens) which stores the N-dimensional position of 
-  each token
+- values: actual values going through the model (pixels, flux, etc.),  
+  must have 5 dimensions (batch, time, channel, height, width). If you're 
+  working in less dimensions just set the extra dims to size 1
+- positions: an ND tensor of shape (n_positional_dims, n_tokens) which 
+  stores the N-dimensional position of each token
 - pad_mask: optional padding mask which marks what values should be ignored 
   during attention
 - label: optional label which is used to calculate the loss
@@ -91,8 +107,8 @@ having no need for labels).
 The Trainer makes use of the [Accelerate](https://huggingface.co/docs/accelerate/en/index) 
 package to enable many advanced features such as multi-GPU and multi-node
 training, torch compile, and mixed precision. 
-To use these features, simply make sure to run the trainer using the 
-```accelerate launch``` command.
+To use these features, simply make sure to run your training script 
+using the ```accelerate launch``` command.
 
 ## Hyperparameter Tips
 
@@ -104,7 +120,7 @@ be useful to  try.
 The most similar model to RoMAE is the Vision Transformer. Therefore, it makes
 sense to keep sizes similar. One difference between the two is that 
 the head embedding dimension must be divisible by 6 in order to be able to 
-apply the rotary positional embeddings. Therefore, the sizes I provide here 
+apply the rotary positional embeddings. Therefore, the sizes we provide here 
 are slightly different but still close to their ViT counterparts.
 
 | Size         | d_model | nhead | depth |
@@ -129,12 +145,9 @@ RoMAE implements both regular [dropout](https://arxiv.org/abs/1207.0580) and
 [stochastic depth](https://arxiv.org/abs/1603.09382). When using 
 regularization, I recommend you take a look at ["How to train your ViT?"](https://arxiv.org/abs/2106.10270).
 In general, if you add regularization you should also increase the number of 
-epochs you are training for.
-Data augmentation is very important too. This should be considered on a 
-per-dataset basis, however.
-
-The encoder config provides fine-grained controls for where dropout is 
-applied. The common approach is to use the same dropout value for:
+epochs you are training for. The encoder config provides fine-grained 
+controls for where dropout is applied. The common approach is to use 
+the same dropout value for:
 
 - ```hidden_drop_rate``` (applies dropout in the MLP layer)
 - ```attn_drop_rate``` (applies dropout on the attention probabilities)
@@ -152,19 +165,7 @@ lr_{new} = lr*np
 $$
 
 Where $np$ is the number of processes (with each process corresponding to a GPU). 
-When training on one GPU, this does nothing, and even when training on a small number it probably does not 
-matter. However, if you want to train on a larger number you should 
-consider using it. This way, you can choose your hyperparameters by testing on 
-one GPU, and then run the full training on many GPU's without having to change 
-them.
-
-## Interpolation Predictions
-
-If you'd like to use RoMAEForPreTraining for interpolation, you can first do a 
-normal training run.
-Then to use the learned weights, you can utilize the predict class method.
-This will take in your known values plus a set of positions you wish to predict 
-the values for and pass it through the model for you.
-Because the method is batched, it also has support for padding.
-When using padding, you must pass two padding arrays. One for the values, and 
-one for the predictions.
+When training on one GPU, this does nothing. If you want to train on a 
+larger number of GPU's however, you should consider using it. This way, 
+you can choose your hyperparameters by testing on one GPU, and then run 
+the full training on many GPU's without having to change them.
