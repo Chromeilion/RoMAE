@@ -4,10 +4,15 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "RoMAE"
-version = "0.1.0-alpha"
+version = "0.9.0-alpha"
 description = "Rotary Masked Autoencoder. For use with multi-dimensional sparse data, irregular timeseries, and more!."
 readme = "README.md"
+license = "MIT"
+license-files = ["LICENSE"]
 requires-python = ">=3.11"
+maintainers = [
+    {name = "Uros Zivanovic"}
+]
 dependencies = [
     "torch",
     "numpy",
@@ -18,6 +23,9 @@ dependencies = [
     "nvidia-ml-py",
     "einops"
 ]
+
+[project.urls]
+Repository = "https://github.com/Chromeilion/RoMAE"
 
 [tool.setuptools.packages.find]
 include = ["romae"]
