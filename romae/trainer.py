@@ -88,6 +88,10 @@ class TrainerConfig(BaseSettings):
                     "to a new value using base_lr*np, where np is the "
                     "number of processes being used for training."
     )
+    log_wandb: bool = Field(
+        default=True,
+        description="Whether to log metrics to Weights and Biases."
+    )
 
 
 class Trainer:
@@ -173,7 +177,8 @@ class Trainer:
         accelerator = Accelerator(
             project_dir=self.config.checkpoint_dir
         )
-        self.init_wandb(accelerator=accelerator, model=model)
+        if self.config.log_wandb:
+            self.init_wandb(accelerator=accelerator, model=model)
         train_dataloader, test_dataloader = self.get_dataloaders(
             train_dataset=train_dataset,
             test_dataset=test_dataset,
@@ -241,7 +246,8 @@ class Trainer:
                 self.save_checkpoint(accelerator, step_counter, model_config)
                 self.post_train_hook(model, self.run, accelerator.device)
                 model.train()
-            self.run.finish()
+            if self.run is not None:
+                self.run.finish()
         accelerator.end_training()
 
     def set_post_train_hook(self, hook):
@@ -263,24 +269,25 @@ class Trainer:
     def evaluate(self, accelerator, model, loss_train, test_dataloader, optim, step):
         if loss_train is None:
             return
-        grads = [
-            param.grad.detach().flatten()
-            for param in model.parameters()
-            if param.grad is not None
-        ]
-        norm = torch.cat(grads).norm()
-        self.run.log({"train/gradient_norm": norm}, step=step)
-        self.run.log({"train/lr": optim.param_groups[0]["lr"]}, step=step)
-        if loss_train is not None:
-            self.run.log({"loss/train": loss_train.item()}, step=step)
-            print(f"Train loss: {loss_train.item()}\n")
-        loss = 0
-        for modelargs in tqdm.tqdm(test_dataloader, desc="Evaluating"):
-            modelargs = {key: val.to(accelerator.device) for key, val in
-                         modelargs.items()}
-            _, loss_ = model(**modelargs)
-            loss = loss + loss_ / len(test_dataloader)
-        self.run.log({"loss/validation": loss.item()}, step=step)
+        if self.run is not None:
+            grads = [
+                param.grad.detach().flatten()
+                for param in model.parameters()
+                if param.grad is not None
+            ]
+            norm = torch.cat(grads).norm()
+            self.run.log({"train/gradient_norm": norm}, step=step)
+            self.run.log({"train/lr": optim.param_groups[0]["lr"]}, step=step)
+            if loss_train is not None:
+                self.run.log({"loss/train": loss_train.item()}, step=step)
+                print(f"Train loss: {loss_train.item()}\n")
+            loss = 0
+            for modelargs in tqdm.tqdm(test_dataloader, desc="Evaluating"):
+                modelargs = {key: val.to(accelerator.device) for key, val in
+                             modelargs.items()}
+                _, loss_ = model(**modelargs)
+                loss = loss + loss_ / len(test_dataloader)
+            self.run.log({"loss/validation": loss.item()}, step=step)
         self.evaluate_callback(model, loss_train, test_dataloader)
 
     def save_checkpoint(self, accelerator: Accelerator, step_counter,
