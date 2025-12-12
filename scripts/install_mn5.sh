@@ -2,9 +2,9 @@
 # Because installing packages is a pain in MareNostrum 5, this script makes it
 # easier.
 # It will load Python 3.11, create a virtual environment, and install all the
-# required packages for RoMA in this virtualenv.
+# required packages for RoMAE in this virtualenv.
 
-# All of these packages are stored in the following directory
+# All of these packages are stored in the following directories
 package_root_folder=/gpfs/projects/ehpc10/rmae/uzivanov/software_m
 PREFIX_DIR=/gpfs/projects/ehpc10/rmae/uzivanov/python_prefix
 
@@ -95,6 +95,6 @@ echo "To use the virtualenv, first load the correct modules:"
 echo "module load mkl/2024.0 intel impi hdf5/1.14.1-2-gcc python/3.11.5-gcc nvidia-hpc-sdk/23.11-cuda11.8 openblas/0.3.27-gcc cudnn/9.0.0-cuda11 tensorrt/10.0.0-cuda11 impi/2021.11 gcc/11.4.0 nccl/2.19.4 pytorch/2.4.0"
 echo "Then activate it:"
 echo "source .venv/bin/activate"
-echo "Once this is done, you can install RoMA by moving to the directory with the package in it and running:"
+echo "Once this is done, you can install RoMAE by moving to the directory with the package in it and running:"
 echo "pip install -e . --no-index --no-build-isolation"
 echo "Good luck with your research!"
