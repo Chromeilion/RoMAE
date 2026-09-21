@@ -474,7 +474,7 @@ class RoMAEForClassification(RoMAEBase):
                 ".".join(key.split(".")[1:]): val for key, val in
                 p_model_state.items() if key.split(".")[0] == "encoder"
             }
-            model.encoder.load_state_dict(encoder_keys)a
+            model.encoder.load_state_dict(encoder_keys)
             model.projection.load_state_dict(p_model.projection.state_dict())
             if model.cls is not None:
                 model.cls.copy_(p_model.cls)
